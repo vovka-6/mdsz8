@@ -1,7 +1,9 @@
 /* МДСЗ-8 · электронные обходы. Офлайн-PWA, данные хранятся на телефоне смены. */
 (function () {
   "use strict";
-  const D = window.D8, KEY = "mdsz8-v1", APPV = "демо 1.0";
+  const D = window.D8, KEY = "mdsz8-v1", APPV = "демо 1.2";
+  const DEF = { routes: JSON.parse(JSON.stringify(D.ROUTES)), meas: JSON.parse(JSON.stringify(D.MEAS)) };
+  const ADMIN_ROLE = "Администратор", ADMIN_BTN = ["settings", "map", "shift", "defects", "meas", "archive"];
   const KT = Object.fromEntries(D.KT.map(k => [k.code, k]));
   const $ = s => document.querySelector(s);
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -25,6 +27,31 @@
   function load() { try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.cfg) return s; } catch (e) { } return fresh(); }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast("Память телефона заполнена: отправьте и закройте смену"); } }
 
+  /* ---------- ПИН: храним только хэш ---------- */
+  async function pinHash(id, pin) {
+    const txt = `mdsz8|${id}|${pin}`;
+    if (window.crypto && crypto.subtle) { const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt)); return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, "0")).join(""); }
+    let h = 0x811c9dc5; for (const c of txt) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; } return "f" + h.toString(16);
+  }
+  async function migrate() {
+    let ch = false;
+    for (const s of S.cfg.staff) if (s.pin != null) { if (s.pin) s.ph = await pinHash(s.id, s.pin); delete s.pin; ch = true; }
+    if (!S.cfg.rolesV2) { S.cfg.staff.forEach(s => { s.admin = s.role === "Заместитель начальника ПК"; }); S.cfg.rolesV2 = true; ch = true; }
+    if (!S.cfg.admin) { S.cfg.admin = { fio: "Администратор", ph: await pinHash("admin", "0000"), mustChange: true }; ch = true; }
+    if (!S.cfg.norms) { S.cfg.norms = {}; S.cfg.tnorm = {}; S.cfg.sessionH = 13; ch = true; }
+    applyCfg();
+    if (ch) save();
+  }
+  /* нормативы и нормы температур из настроек администратора */
+  function applyCfg() {
+    for (const k in D.ROUTES) { const d = DEF.routes[k], v = S.cfg.norms && S.cfg.norms[k]; if (d.norm != null) D.ROUTES[k].norm = v || d.norm; if (d.normPer != null) D.ROUTES[k].normPer = v || d.normPer; }
+    for (const t in D.MEAS) D.MEAS[t] = DEF.meas[t].map(([pl, n]) => [pl, (S.cfg.tnorm && S.cfg.tnorm[t + "|" + pl]) || n]);
+  }
+  const isSuper = () => !!(S.session && S.session.id === "admin");
+  const isResp = () => !!(me() && me().admin && !isSuper());
+  const isAdmin = () => isSuper() || isResp();
+  const emails = () => String(S.cfg.email || "").split(/[,;\s]+/).filter(Boolean);
+
   /* ---------- фото: IndexedDB ---------- */
   const IDB = (() => {
     let p; const db = () => p || (p = new Promise((res, rej) => { const r = indexedDB.open("mdsz8", 1); r.onupgradeneeded = () => r.result.createObjectStore("photos"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }));
@@ -41,10 +68,10 @@
   }
 
   /* ---------- пользователь, смена ---------- */
-  const me = () => S.session && S.cfg.staff.find(s => s.id === S.session.id);
+  const me = () => !S.session ? null : S.session.id === "admin" ? { id: "admin", fio: S.cfg.admin.fio, role: ADMIN_ROLE, ph: S.cfg.admin.ph } : S.cfg.staff.find(s => s.id === S.session.id);
   const role = () => (me() || {}).role;
-  const isView = () => !!(D.ROLES[role()] || {}).view;
-  const canEdit = () => ["Мастер смены", "Механик"].includes(role());
+  const isView = () => role() === ADMIN_ROLE || !!(D.ROLES[role()] || {}).view;
+  const canEdit = () => ["Мастер смены", "Механик", ADMIN_ROLE].includes(role());
   const shiftPrefix = () => `G8-${S.shift.date.replace(/-/g, "")}-${S.shift.no}`;
   const kindShort = k => k === "Ремонтная" ? "Рем" : "Техн";
   const isOpen = d => d.status === "Открыт" || d.status === "В работе";
@@ -59,7 +86,7 @@
   function home() { stack = []; cur = { v: S.session ? "home" : "login" }; render(); window.scrollTo(0, 0); }
 
   function render() {
-    if (S.session && Date.now() - S.session.ts > 13 * 3600e3) S.session = null;
+    if (S.session && Date.now() - S.session.ts > (S.cfg.sessionH || 13) * 3600e3) S.session = null;
     if (!S.session && cur.v !== "login") cur = { v: "login" };
     const f = V[cur.v] || V.home;
     $("#app").innerHTML = f(cur.p) || "";
@@ -85,13 +112,13 @@
     S.cfg.staff.forEach(s => (groups[s.role] = groups[s.role] || []).push(s));
     const sh = S.shift ? `<div class="note ok">Открыта смена: ${dmy(ymdToMs(S.shift.date))}, смена ${S.shift.no} · ${S.shift.kind}</div>` : `<div class="note">Смена не открыта — откроется после входа.</div>`;
     return `<h2>Кто вы?</h2>${sh}` + Object.keys(D.ROLES).filter(r => groups[r]).map(r => `<div class="grp">${r}</div>` +
-      groups[r].map(s => `<button class="who" data-a="pickUser" data-v="${s.id}">${esc(short(s.fio))}${/\(пример\)/.test(s.fio) ? `<small>демо · ПИН ${esc(s.pin)}</small>` : ""}</button>`).join("")).join("") +
-      `<p class="muted center">Версия: ${APPV}. Данные хранятся на этом телефоне.</p>`;
+      groups[r].map(s => `<button class="who" data-a="pickUser" data-v="${s.id}">${esc(short(s.fio))}</button>`).join("")).join("") +
+      `<button class="btn adminbtn" data-a="pickUser" data-v="admin">⚙ Вход администратора</button><p class="muted center">Версия: ${APPV}. Данные хранятся на этом телефоне.</p>`;
   };
 
   V.home = () => {
-    const u = me(), R = D.ROLES[u.role], ar = activeRound();
-    let h = shiftBar();
+    const u = me(), R = isSuper() ? { btn: ADMIN_BTN } : D.ROLES[u.role], ar = isSuper() ? null : activeRound();
+    let h = (isSuper() && S.cfg.admin.mustChange ? `<div class="note bad">Смените стартовый ПИН администратора (0000): кнопка «🔑 Сменить свой ПИН» внизу.</div>` : "") + shiftBar();
     if (ar) h += `<button class="big go" data-a="openRound" data-v="${ar.id}">▶ Продолжить: ${esc(ar.route)}<small>${done(ar) + Object.values(ar.pts).filter(p => p.res === "skip").length} из ${ar.list.length} КТ · идёт ${mins(ar.start)} мин</small></button>`;
     const crit = S.defects.filter(d => isOpen(d) && d.cat === "Критический").length;
     if (crit) h += `<div class="note bad">⛔ Открытых критических дефектов: ${crit}</div>`;
@@ -108,15 +135,17 @@
       shift: ["📋 Смена", "план / факт, кто у пульта"],
       defects: [u.role === "Механик" ? "🛠 Дефекты в работу" : "🛠 Дефекты", u.role === "Заместитель начальника ПК" ? "просмотр" : "ответственный, срок, закрытие"],
       meas: ["🌡 Замеры", "температуры, вне нормы"],
-      close: ["📨 Закрыть смену и отправить", S.cfg.email],
-      settings: ["⚙ Настройки", "люди, ПИН, почта"],
+      close: ["📨 Закрыть смену и отправить", emails().join(", ")],
+      settings: isSuper() ? ["⚙ Все настройки", "персонал, почта, нормы, план"] : ["👥 Персонал", "ФИО, должности, ПИН"],
+      archive: ["🗂 Архив отчётов", "сформированные отчёты смен"],
     };
-    h += `<div class="tiles">` + R.btn.map(b => {
+    h += `<div class="tiles">` + R.btn.concat(isResp() ? ["settings"] : []).map(b => {
       const isRoute = !!D.ROUTES[b]; const pf = isRoute ? planFact(b, u.role) : "";
       const dis = (isRoute || b === "report") && (!S.shift || ar) ? " disabled" : "";
       return `<button class="tile ${isRoute ? "route" : ""} ${b === "report" ? "warn" : ""} ${b === "close" ? "send" : ""}" data-a="homeBtn" data-v="${b}"${dis}><b>${L[b][0]}</b><small>${esc(L[b][1])}${pf}</small></button>`;
     }).join("") + `</div>`;
     if (!S.shift && !isView()) h += `<button class="big" data-a="openShiftForm">Открыть смену</button>`;
+    h += `<button class="btn" data-a="myPin">🔑 Сменить свой ПИН</button>`;
     return h;
   };
   function shiftBar() {
@@ -264,7 +293,7 @@
   V.crit = id => {
     const d = S.defects.find(x => x.id === id);
     return `<div class="critbox"><div class="big-ico">⛔</div><h2>ОСТАНОВИТЬ<br>${esc(KT[d.kt].name)}</h2><p>Доложить мастеру смены немедленно.</p><p class="cd">${esc(d.node)}: ${esc(d.desc)}</p></div>
-      <button class="big crit" data-a="critMail" data-v="${id}">✉ Письмо КРИТ на ${esc(S.cfg.email)}</button>
+      <button class="big crit" data-a="critMail" data-v="${id}">✉ Письмо КРИТ на ${esc(emails()[0])}${emails().length > 1 ? " и др." : ""}</button>
       ${d.photos.length && navigator.canShare ? `<button class="btn" data-a="critPhoto" data-v="${id}">📷 Отправить фото (Поделиться)</button>` : ""}
       <button class="big" data-a="critDone">Доложено — продолжить</button>`;
   };
@@ -381,26 +410,58 @@
     const a = S.archive[i];
     return `<div class="note ${a.sent ? "ok" : ""}">${a.sent ? "✓ Отмечено как отправленное " + dmyhm(a.sent) : "Отчёт сформирован. Осталось отправить письмо."}</div>
       <div class="step"><b>1</b><div>Скачайте файлы на телефон.<small>${esc(a.file)}${a.photos.length ? " и фото: " + a.photos.length + " шт." : ""} Если телефон спросит «Разрешить скачивание нескольких файлов» — разрешите.</small><button class="big" data-a="download" data-v="${i}">⬇ Скачать отчёт${a.photos.length ? " и фото" : ""}</button></div></div>
-      <div class="step"><b>2</b><div>Откройте письмо — адрес, тема и текст подставятся сами.<small>Кому: ${esc(S.cfg.email)}</small><button class="big" data-a="mail" data-v="${i}">✉ Открыть письмо</button></div></div>
+      <div class="step"><b>2</b><div>Откройте письмо — адрес, тема и текст подставятся сами.<small>Кому: ${esc(emails().join(", "))}</small><button class="big" data-a="mail" data-v="${i}">✉ Открыть письмо</button></div></div>
       <div class="step"><b>3</b><div>В письме нажмите 📎 «Прикрепить» → «Загрузки» и выберите файл <b>${esc(a.file)}</b>${a.photos.length ? " и фото" : ""}. Нажмите «Отправить».</div></div>
       <div class="step"><b>4</b><div><button class="big go" data-a="markSent" data-v="${i}">✓ Письмо отправлено</button></div></div>
       <details><summary>Если письмо не открылось</summary><p>Скопируйте и вставьте вручную:</p>
-        <button class="btn" data-a="copy" data-v="${esc(S.cfg.email)}">Копировать адрес</button><button class="btn" data-a="copy" data-v="${esc(a.subject)}">Копировать тему</button><button class="btn" data-a="copyBody" data-v="${i}">Копировать текст письма</button></details>
+        <button class="btn" data-a="copy" data-v="${esc(emails().join(", "))}">Копировать адрес</button><button class="btn" data-a="copy" data-v="${esc(a.subject)}">Копировать тему</button><button class="btn" data-a="copyBody" data-v="${i}">Копировать текст письма</button></details>
       <div class="grp">Тема письма</div><div class="mono">${esc(a.subject)}</div><div class="grp">Текст</div><pre class="mono">${esc(a.body)}</pre>`;
   };
   V.archive = () => S.archive.length ? S.archive.map((a, i) => ({ a, i })).reverse().map(({ a, i }) => `<button class="row" data-a="go" data-v="send" data-i="${i}">${a.sent ? "✓" : "⏳"} ${esc(a.file)}<small>${a.sent ? "отправлен " + dmyhm(a.sent) : "не отправлен"}</small></button>`).join("") : `<p class="muted center">Отчётов пока нет</p>`;
 
   /* --- настройки --- */
-  V.settings = () => `<label>Почта для отчётов<input type="email" id="cfgMail" value="${esc(S.cfg.email)}"></label>
-    <div class="grp">Работники (ФИО, должность, ПИН)</div>
-    ${S.cfg.staff.map(s => `<div class="staff" data-id="${s.id}"><input class="sf" value="${esc(s.fio)}" placeholder="Фамилия И.О."><select class="sr">${Object.keys(D.ROLES).map(r => `<option ${s.role === r ? "selected" : ""}>${r}</option>`).join("")}</select><input class="sp" value="${esc(s.pin)}" inputmode="numeric" maxlength="6" placeholder="ПИН"><b data-a="delStaff" data-v="${s.id}">×</b></div>`).join("")}
-    <button class="btn" data-a="addStaff">+ Добавить работника</button>
+  function staffList() {
+    return `<div class="grp">Персонал</div>
+    <div class="hint">Нажмите на работника, чтобы изменить ФИО, должность или задать новый ПИН. ПИН нигде не показывается — его можно только заменить.</div>
+    ${Object.keys(D.ROLES).map(r => S.cfg.staff.filter(s => s.role === r).map(s => `<button class="row" data-a="staffEdit" data-v="${s.id}"><span style="flex:1">${esc(s.fio)}${s.admin ? " 🛡" : ""}</span><small>${r} · ${s.ph ? "ПИН задан" : "<b class=red>ПИН не задан</b>"}</small></button>`).join("")).join("")}
+    <button class="btn" data-a="staffEdit" data-v="">+ Добавить работника</button>
+    <div class="hint">🛡 — ответственный: ведёт персонал и ПИН. Назначает ответственных только администратор.</div>`;
+  }
+  V.settings = () => {
+    if (isResp()) return staffList();
+    if (!isSuper()) return `<p class="muted">Нет доступа.</p>`;
+    const rn = ["P", "PE", "C", "CE", "R"].map(k => [k, D.ROUTES[k].label + ", мин на маршрут", D.ROUTES[k].norm]).concat(["RA", "V"].map(k => [k, D.ROUTES[k].label + ", мин на 1 КТ", D.ROUTES[k].normPer]));
+    return staffList() + `
+    <div class="grp">Почта для отчётов</div><input id="cfgMail" value="${esc(emails().join(", "))}" placeholder="адрес@почта.ru"><div class="hint">Можно несколько адресов через запятую.</div>
     <div class="grp">План обходов на смену</div>
     ${["Технологическая", "Ремонтная"].map(k => `<div class="muted">${k}</div>` + (S.cfg.plan[k] || []).map(([rk, rl, n], j) => `<div class="planrow">${D.ROUTES[rk].label} · ${rl}<input class="pn" data-k="${k}" data-j="${j}" value="${n}" inputmode="numeric"></div>`).join("")).join("")}
+    <div class="grp">Нормативы времени обхода</div>
+    ${rn.map(([k, t, v]) => `<div class="planrow">${t}<input class="rn" data-k="${k}" value="${v}" inputmode="numeric"></div>`).join("")}
+    <div class="grp">Нормы температур (пирометр), °C не более</div>
+    ${Object.keys(D.MEAS).map(t => D.MEAS[t].map(([pl, n]) => `<div class="planrow">${esc(D.TYPES[t][0])}: ${esc(pl)}<input class="tn" data-k="${t}|${esc(pl)}" value="${n}" inputmode="numeric"></div>`).join("")).join("")}
+    <div class="grp">Автовыход</div><div class="planrow">Выходить из учётной записи через, часов<input id="cfgSess" value="${S.cfg.sessionH || 13}" inputmode="numeric"></div>
     <button class="big go" data-a="saveSettings">Сохранить настройки</button>
-    <div class="grp">Демо</div>
+    <div class="grp">Перенос настроек на другой телефон</div>
+    <div class="hint">Файл содержит персонал (ПИН — в зашифрованном виде), почту, план и нормы. Обходы и дефекты не переносятся.</div>
+    <button class="btn" data-a="cfgExport">⬇ Сохранить настройки в файл</button>
+    <label class="btn center" style="font-weight:400">⬆ Загрузить настройки из файла<input type="file" id="cfgImport" accept=".json,application/json" hidden></label>
+    <div class="grp">Администратор</div>
+    <button class="btn" data-a="myPin">🔑 Сменить ПИН администратора</button>
     <button class="btn" data-a="resetAll">Стереть все данные на телефоне</button>
-    <p class="muted">Версия ${APPV}. Почта по умолчанию: ${D.EMAIL}.</p>`;
+    <p class="muted">Версия ${APPV}. Если ПИН администратора забыт, восстановить его нельзя — только сбросить данные сайта в Chrome (сотрёт всё). Храните файл настроек.</p>`;
+  };
+  AFTER.settings = () => {
+    const f = $("#cfgImport"); if (!f) return;
+    f.addEventListener("change", async e => {
+      const file = e.target.files[0]; if (!file) return;
+      try {
+        const j = JSON.parse(await file.text());
+        if (j.type !== "mdsz8-settings" || !j.cfg || !Array.isArray(j.cfg.staff) || !j.cfg.admin) throw new Error();
+        if (!confirm(`Загрузить настройки из файла (${j.cfg.staff.length} работников)? Текущий персонал, почта и нормы будут заменены, ПИН администратора — из файла.`)) return;
+        S.cfg = j.cfg; applyCfg(); save(); toast("Настройки загружены"); A.logout();
+      } catch (er) { toast("Это не файл настроек МДСЗ-8"); }
+    });
+  };
 
   /* ---------- действия ---------- */
   const A = {};
@@ -413,17 +474,25 @@
   A.zoom = src => modal(`<div class="zoom"><img src="${src}"></div><button class="btn" data-a="closeModal">Закрыть</button>`);
 
   A.pickUser = id => {
-    const s = S.cfg.staff.find(x => x.id === id); let pin = "";
-    const draw = () => modal(`<h3>${esc(short(s.fio))}</h3><div class="pinv">${"●".repeat(pin.length) || "Введите ПИН"}</div><div class="kp">${[1, 2, 3, 4, 5, 6, 7, 8, 9, "⌫", 0, "OK"].map(k => `<button data-a="kp" data-v="${k}">${k}</button>`).join("")}</div>`);
-    A.kp = k => {
-      if (k === "⌫") pin = pin.slice(0, -1); else if (k === "OK") {
-        if (pin === s.pin) { closeModal(); S.session = { id, ts: Date.now() }; save(); if (!S.shift && !D.ROLES[s.role].view) { stack = []; cur = { v: "home" }; go("openShift"); } else home(); return; }
-        pin = ""; toast("Неверный ПИН");
+    const s = id === "admin" ? { id: "admin", fio: "Администратор", role: ADMIN_ROLE, ph: S.cfg.admin.ph } : S.cfg.staff.find(x => x.id === id); let pin = "", busy = false;
+    const lockLeft = () => Math.ceil(((S.lock || {})[id] || 0) - Date.now()) / 1000;
+    const draw = (msg) => modal(`<h3>${esc(short(s.fio))}</h3><div class="pinv">${"●".repeat(pin.length) || (msg || "Введите ПИН")}</div><div class="kp">${[1, 2, 3, 4, 5, 6, 7, 8, 9, "⌫", 0, "OK"].map(k => `<button data-a="kp" data-v="${k}">${k}</button>`).join("")}</div>`);
+    const enter = () => { closeModal(); (S.fails || {})[id] = 0; S.session = { id, ts: Date.now() }; save(); if (!S.shift && D.ROLES[s.role] && !D.ROLES[s.role].view) { stack = []; cur = { v: "home" }; go("openShift"); } else home(); };
+    A.kp = async k => {
+      if (busy) return;
+      if (lockLeft() > 0) { pin = ""; return draw(`Вход заблокирован на ${Math.ceil(lockLeft())} с`); }
+      if (k === "⌫") pin = pin.slice(0, -1);
+      else if (k === "OK") {
+        busy = true; const ok = s.ph && (await pinHash(id, pin)) === s.ph; busy = false;
+        if (ok) return enter();
+        S.fails = S.fails || {}; S.fails[id] = (S.fails[id] || 0) + 1; pin = "";
+        if (S.fails[id] >= 5) { S.lock = S.lock || {}; S.lock[id] = Date.now() + 60000; S.fails[id] = 0; save(); return draw("5 ошибок — пауза 1 мин"); }
+        save(); toast(`Неверный ПИН (попытка ${S.fails[id]} из 5)`);
       } else if (pin.length < 6) pin += k;
       draw();
-      if (pin === s.pin) A.kp("OK");
+      if (pin.length >= 4 && s.ph) { busy = true; const ok = (await pinHash(id, pin)) === s.ph; busy = false; if (ok) enter(); }
     };
-    draw();
+    draw(s.ph ? "" : "ПИН не задан — обратитесь к ответственному");
   };
   A.logout = () => { S.session = null; save(); home(); };
   A.openShiftForm = () => go("openShift");
@@ -547,7 +616,7 @@
     const d = S.defects.find(x => x.id === id);
     const subj = `[МДСЗ-8][КРИТ][${KT[d.kt].name}][${dmyhm(d.date)}]`;
     const body = [`КРИТИЧЕСКИЙ ДЕФЕКТ — МДСЗ-8, ПК «Гаврилово»`, `Оборудование: ${KT[d.kt].name} (${d.kt})`, `Узел: ${d.node}`, `Дефект: ${d.desc}`, `Выявил: ${short(d.who)}, ${d.post}`, `Время: ${dmyhm(d.date)}, смена ${d.shiftNo} (${d.kind})`, `ID: ${d.id}`, d.photos.length ? `Фото: ${d.photos.join(", ")}` : "", ``, `Оборудование остановлено, мастер смены извещён.`].filter(x => x !== "").join("\r\n");
-    location.href = `mailto:${S.cfg.email}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body)}`;
+    location.href = `mailto:${emails().join(",")}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body)}`;
   };
   A.critPhoto = async id => {
     const d = S.defects.find(x => x.id === id), files = [];
@@ -650,30 +719,81 @@
     for (const n of a.photos) { await new Promise(r => setTimeout(r, 700)); const b = await IDB.get(n).catch(() => null); if (b) dl(b, n); else miss++; }
     toast(`Скачано: ${a.file}${a.photos.length ? ` и фото ${a.photos.length - miss}` : ""}. Файлы — в папке «Загрузки».`);
   };
-  A.mail = i => { const a = S.archive[+i]; location.href = `mailto:${S.cfg.email}?subject=${encodeURIComponent(a.subject)}&body=${encodeURIComponent(a.body)}`; };
+  A.mail = i => { const a = S.archive[+i]; location.href = `mailto:${emails().join(",")}?subject=${encodeURIComponent(a.subject)}&body=${encodeURIComponent(a.body)}`; };
   A.markSent = i => { S.archive[+i].sent = Date.now(); save(); toast("Отчёт отмечен как отправленный"); A.logout(); };
   A.copy = async v => { try { await navigator.clipboard.writeText(v); toast("Скопировано"); } catch (e) { prompt("Скопируйте:", v); } };
   A.copyBody = i => A.copy(S.archive[+i].body);
 
-  A.addStaff = () => { readStaff(); S.cfg.staff.push({ id: "u" + Date.now(), fio: "", role: "Дробильщик", pin: "" }); render(); };
-  A.delStaff = id => { readStaff(); if (S.session && id === S.session.id) return toast("Нельзя удалить себя"); S.cfg.staff = S.cfg.staff.filter(s => s.id !== id); render(); };
-  function readStaff() {
-    document.querySelectorAll(".staff").forEach(r => { const s = S.cfg.staff.find(x => x.id === r.dataset.id); if (s) { s.fio = r.querySelector(".sf").value.trim(); s.role = r.querySelector(".sr").value; s.pin = r.querySelector(".sp").value.trim(); } });
-  }
-  A.saveSettings = () => {
-    readStaff();
-    const bad = S.cfg.staff.find(s => !s.fio || !/^\d{4,6}$/.test(s.pin)); if (bad) return toast("У каждого работника нужны ФИО и ПИН из 4–6 цифр");
-    const em = $("#cfgMail").value.trim(); if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return toast("Проверьте адрес почты");
-    S.cfg.email = em;
-    document.querySelectorAll(".pn").forEach(i => { const v = parseInt(i.value, 10); if (v >= 0) S.cfg.plan[i.dataset.k][+i.dataset.j][2] = v; });
-    save(); toast("Настройки сохранены"); back();
+  A.staffEdit = id => {
+    if (!isAdmin()) return;
+    const s = S.cfg.staff.find(x => x.id === id) || { id: "", fio: "", role: "Дробильщик", admin: false };
+    modal(`<h3>${s.id ? "Изменить работника" : "Новый работник"}</h3>
+      <label>ФИО<input id="stFio" value="${esc(s.fio)}" placeholder="Фамилия И.О."></label>
+      <label>Должность<select id="stRole">${Object.keys(D.ROLES).map(r => `<option ${s.role === r ? "selected" : ""}>${r}</option>`).join("")}</select></label>
+      ${isSuper() ? `<label class="chk"><input type="checkbox" id="stAdm" ${s.admin ? "checked" : ""}> 🛡 Ответственный — ведёт персонал и ПИН</label>` : (s.admin ? `<div class="hint">🛡 Ответственный (назначает администратор)</div>` : "")}
+      <label>${s.id ? "Новый ПИН (оставьте пустым, чтобы не менять)" : "ПИН (4–6 цифр)"}<input id="stPin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="6"></label>
+      <label>Повторите ПИН<input id="stPin2" type="password" inputmode="numeric" autocomplete="new-password" maxlength="6"></label>
+      <button class="big go" data-a="staffSave" data-v="${s.id}">Сохранить</button>
+      ${s.id && s.id !== S.session.id && (isSuper() || !s.admin) ? `<button class="btn" data-a="staffDel" data-v="${s.id}">Удалить работника</button>` : ""}
+      <button class="btn" data-a="closeModal">Отмена</button>`);
   };
-  A.resetAll = () => { if (!confirm("Стереть все обходы, дефекты, отчёты и настройки на этом телефоне?")) return; localStorage.removeItem(KEY); indexedDB.deleteDatabase("mdsz8"); S = fresh(); home(); };
+  A.staffSave = async id => {
+    if (!isAdmin()) return;
+    const fio = $("#stFio").value.trim(), role = $("#stRole").value, p1 = $("#stPin").value.trim(), p2 = $("#stPin2").value.trim();
+    if (!fio) return toast("Укажите ФИО");
+    if (S.cfg.staff.some(x => x.id !== id && x.fio.toLowerCase() === fio.toLowerCase())) return toast("Работник с таким ФИО уже есть");
+    if (!id && !p1) return toast("Задайте ПИН");
+    if (p1 && !/^\d{4,6}$/.test(p1)) return toast("ПИН — от 4 до 6 цифр");
+    if (p1 !== p2) return toast("ПИН и повтор не совпадают");
+    let s = S.cfg.staff.find(x => x.id === id);
+    if (s && s.admin && !isSuper() && s.id !== S.session.id) return toast("Данные ответственного меняет администратор");
+    const adm = isSuper() ? $("#stAdm").checked : !!(s && s.admin);
+    if (!s) { s = { id: "u" + Date.now() }; S.cfg.staff.push(s); }
+    s.fio = fio; s.role = role; s.admin = adm;
+    if (p1) { s.ph = await pinHash(s.id, p1); if (S.fails) S.fails[s.id] = 0; if (S.lock) S.lock[s.id] = 0; }
+    save(); closeModal(); render(); toast(p1 ? "Сохранено, ПИН задан" : "Сохранено");
+  };
+  A.staffDel = id => {
+    const s = S.cfg.staff.find(x => x.id === id);
+    if (!s || !confirm(`Удалить ${short(s.fio)}? Записи с его ФИО в дефектах и отчётах сохранятся.`)) return;
+    if (s.admin && !isSuper()) return toast("Удалить ответственного может только администратор");
+    S.cfg.staff = S.cfg.staff.filter(x => x.id !== id); save(); closeModal(); render();
+  };
+  A.myPin = () => modal(`<h3>Сменить свой ПИН</h3>
+    <label>Текущий ПИН<input id="mp0" type="password" inputmode="numeric" autocomplete="current-password" maxlength="6"></label>
+    <label>Новый ПИН (4–6 цифр)<input id="mp1" type="password" inputmode="numeric" autocomplete="new-password" maxlength="6"></label>
+    <label>Повторите новый ПИН<input id="mp2" type="password" inputmode="numeric" autocomplete="new-password" maxlength="6"></label>
+    <button class="big go" data-a="myPinSave">Сохранить</button><button class="btn" data-a="closeModal">Отмена</button>`);
+  A.myPinSave = async () => {
+    const u = me(), p0 = $("#mp0").value.trim(), p1 = $("#mp1").value.trim(), p2 = $("#mp2").value.trim();
+    if ((await pinHash(u.id, p0)) !== (u.id === "admin" ? S.cfg.admin.ph : u.ph)) return toast("Текущий ПИН неверный");
+    if (!/^\d{4,6}$/.test(p1)) return toast("Новый ПИН — от 4 до 6 цифр");
+    if (p1 !== p2) return toast("ПИН и повтор не совпадают");
+    if (u.id === "admin") { S.cfg.admin.ph = await pinHash("admin", p1); S.cfg.admin.mustChange = false; } else u.ph = await pinHash(u.id, p1);
+    save(); closeModal(); render(); toast("ПИН изменён");
+  };
+  A.saveSettings = () => {
+    if (!isSuper()) return;
+    const em = $("#cfgMail").value.split(/[,;\s]+/).filter(Boolean);
+    if (!em.length || em.some(x => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x))) return toast("Проверьте адреса почты");
+    S.cfg.email = em.join(",");
+    document.querySelectorAll(".pn").forEach(i => { const v = parseInt(i.value, 10); if (v >= 0) S.cfg.plan[i.dataset.k][+i.dataset.j][2] = v; });
+    document.querySelectorAll(".rn").forEach(i => { const v = parseInt(i.value, 10); if (v > 0) S.cfg.norms[i.dataset.k] = v; });
+    document.querySelectorAll(".tn").forEach(i => { const v = parseFloat(i.value.replace(",", ".")); if (v > 0) S.cfg.tnorm[i.dataset.k] = v; });
+    const h = parseInt($("#cfgSess").value, 10); if (h >= 1 && h <= 24) S.cfg.sessionH = h;
+    applyCfg(); save(); toast("Настройки сохранены"); back();
+  };
+  A.cfgExport = () => {
+    if (!isSuper()) return;
+    const blob = new Blob([JSON.stringify({ type: "mdsz8-settings", v: 1, saved: new Date().toISOString(), cfg: S.cfg }, null, 1)], { type: "application/json" });
+    dl(blob, `МДСЗ8_настройки_${ymd(Date.now())}.json`); toast("Файл настроек — в папке «Загрузки»");
+  };
+  A.resetAll = () => { if (!isSuper() || !confirm("Стереть все обходы, дефекты, отчёты и настройки на этом телефоне? Персонал вернётся к демо-списку.")) return; localStorage.removeItem(KEY); indexedDB.deleteDatabase("mdsz8"); S = fresh(); migrate().then(home); };
 
   $("#hdrBack").addEventListener("click", () => { closeModal(); if (cur.v === "point") return A.openRound(cur.p.rid); back(); });
   $("#hdrOut").addEventListener("click", () => { if (confirm("Выйти? Начатый обход сохранится.")) A.logout(); });
   window.MDSZ8 = { state: () => S, A };
-  render();
+  migrate().then(render, render);
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js").then(reg => {

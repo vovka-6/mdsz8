@@ -1,7 +1,7 @@
 /* Офлайн-режим: все файлы приложения хранятся на телефоне.
    После любого изменения файлов на GitHub увеличьте VERSION —
    телефоны скачают обновление при следующем выходе в интернет. */
-const VERSION = "mdsz8-v1";
+const VERSION = "mdsz8-v3";
 const FILES = [
   "./", "./index.html", "./app.js", "./data.js", "./xlsx-lite.js", "./manifest.webmanifest",
   "./scheme.jpg", "./route_P.jpg", "./route_C.jpg", "./route_R.jpg",
