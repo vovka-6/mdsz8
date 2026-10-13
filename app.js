@@ -1,646 +1,684 @@
-/* Агрегатный журнал ТОиР — офлайн-приложение.
-   Все данные хранятся в памяти телефона (IndexedDB). Передача — файлом. */
-"use strict";
+/* МДСЗ-8 · электронные обходы. Офлайн-PWA, данные хранятся на телефоне смены. */
+(function () {
+  "use strict";
+  const D = window.D8, KEY = "mdsz8-v1", APPV = "демо 1.0";
+  const KT = Object.fromEntries(D.KT.map(k => [k.code, k]));
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const p2 = n => String(n).padStart(2, "0"), p3 = n => String(n).padStart(3, "0");
+  const ymd = t => { const d = new Date(t); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`; };
+  const dmy = t => { const d = new Date(t); return `${p2(d.getDate())}.${p2(d.getMonth() + 1)}.${d.getFullYear()}`; };
+  const hm = t => { const d = new Date(t); return `${p2(d.getHours())}:${p2(d.getMinutes())}`; };
+  const dmyhm = t => dmy(t) + " " + hm(t);
+  const ymdToMs = s => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d).getTime(); };
+  const addDays = (t, n) => { const d = new Date(t); d.setDate(d.getDate() + n); return ymd(d); };
+  const short = fio => String(fio || "").replace(/\s*\(пример\)/, "");
+  const ktLabel = c => `${KT[c].n}. ${KT[c].name}`;
+  const typeName = c => D.TYPES[KT[c].type][0];
 
-/* ========= Чек-листы ========= */
-function jawNodes(motorKw){ return [
- {id:"frame", t:"Станина и фундамент", items:[
-   ["f1","Станина, сварные швы: без трещин и сколов"],
-   ["f2","Фундаментные болты затянуты, гайки законтрены"],
-   ["f3","Боковые футеровки (клинья) на месте, износ в норме"]],
-  rem:["Трещина станины","Ослаблены фундаментные болты","Износ боковой футеровки","Выпала/сместилась боковая футеровка"]},
- {id:"plates", t:"Дробящие плиты", items:[
-   ["p1","Неподвижная плита: износ зубьев в норме, крепление плотное"],
-   ["p2","Подвижная плита верхняя: износ в норме, крепление плотное"],
-   ["p3","Подвижная плита нижняя: износ в норме, крепление плотное"]],
-  rem:["Износ зубьев более 50%","Ослаблено крепление плиты","Трещина дробящей плиты","Требуется разворот плиты","Налипание / забивка камеры"]},
- {id:"jaw", t:"Подвижная щека и ось подвеса", items:[
-   ["j1","Нет стука и рывков при работе"],
-   ["j2","Опоры оси подвеса: нагрев в норме, смазка поступает"]],
-  rem:["Стук в оси подвеса","Перегрев опоры оси подвеса","Износ втулок оси подвеса","Трещина щеки"]},
- {id:"shaft", t:"Эксцентриковый вал и коренные подшипники", items:[
-   ["s1","Подшипники без постороннего шума"],
-   ["s2","Уплотнения целы, выброса смазки нет"],
-   ["s3","Крепление корпусов подшипников плотное"]],
-  rem:["Шум / гул подшипника","Перегрев подшипника","Течь смазки через уплотнение","Ослаблено крепление корпуса подшипника"]},
- {id:"rod", t:"Шатун", items:[
-   ["r1","Шатун без трещин, нет стука в головке"],
-   ["r2","Подшипник шатуна: нагрев в норме"]],
-  rem:["Стук в головке шатуна","Трещина шатуна","Перегрев подшипника шатуна"]},
- {id:"toggle", t:"Распорные плиты и сухари", items:[
-   ["t1","Передняя распорная плита цела"],
-   ["t2","Задняя распорная плита цела"],
-   ["t3","Сухари / вкладыши без выработки, сочленения смазаны"]],
-  rem:["Износ сухарей","Трещина распорной плиты","Выработка вкладышей","Нет смазки в сочленениях"]},
- {id:"lock", t:"Замыкающее устройство (тяга с пружиной)", items:[
-   ["l1","Пружина цела, натяжение в норме"],
-   ["l2","Тяга цела, гайки законтрены, нет стука распорных плит"]],
-  rem:["Поломка пружины","Ослабло натяжение тяги","Стук распорных плит","Сорвана резьба тяги"]},
- {id:"adjust", t:"Механизм регулировки щели", items:[
-   ["a1","Регулировочные клинья / прокладки зафиксированы"]],
-  rem:["Смещение регулировочного клина","Не хватает прокладок"]},
- {id:"drive", t:"Маховики и клиноременная передача", items:[
-   ["d1","Маховики закреплены на валу, биения нет"],
-   ["d2","Ремни натянуты, комплект полный, без расслоения"],
-   ["d3","Ограждение передачи установлено"]],
-  rem:["Проскальзывание ремней","Износ / обрыв ремня","Биение маховика","Ослаблена шпонка маховика","Нет ограждения"]},
- {id:"motor", t:`Электродвигатель ${motorKw} кВт`, items:[
-   ["m1","Нагрев, шум и вибрация в норме"],
-   ["m2","Крепление к раме плотное, заземление подключено"]],
-  rem:["Перегрев двигателя","Повышенная вибрация","Ослаблено крепление","Нет заземления","Искрение / запах гари"]},
- {id:"lube", t:"Система смазки", items:[
-   ["o1","Уровень масла / смазки в норме"],
-   ["o2","Давление масла в норме, насос / станция работает"],
-   ["o3","Маслопроводы без утечек"]],
-  rem:["Низкий уровень масла","Низкое давление масла","Утечка из маслопровода","Загрязнение масла / фильтра"]},
- {id:"safety", t:"Безопасность и рабочая зона", items:[
-   ["x1","Ограждения на месте, аварийный стоп исправен"],
-   ["x2","Площадки и проходы очищены от просыпи"]],
-  rem:["Неисправен аварийный стоп","Просыпь на площадках","Нет ограждения","Нарушено освещение"]}
-];}
-
-/* Модели с чек-листами. Новую модель добавляют сюда. */
-const MODELS = {
-  "СМД-118": {kind:"Дробилка щековая", alias:"ЩДП-12×15", gap:[115,195], tMax:70,
-    specs:[["Загрузочное отверстие","1200 × 1500 мм"],["Выходная щель","155 ± 40 мм"],["Производительность","до 310 м³/ч"],["Двигатель","160 кВт"],["Макс. кусок","1000 мм"],["Масса","≈145 т"]],
-    nodes: jawNodes(160)},
-  "СМД-111": {kind:"Дробилка щековая", alias:"ЩДП-9×12", gap:[95,165], tMax:70,
-    specs:[["Загрузочное отверстие","900 × 1200 мм"],["Выходная щель","95–165 мм"],["Производительность","131–228 м³/ч"],["Двигатель","110 кВт"],["Макс. кусок","750 мм"],["Масса","≈61,5 т"]],
-    nodes: jawNodes(110)}
-};
-const VERDICT = {ok:"Исправна", warn:"Работоспособна с замечаниями", bad:"Неисправна, остановить"};
-const VPILL = {ok:"p-ok", warn:"p-warn", bad:"p-bad"};
-
-/* ========= Хранилище на телефоне (IndexedDB) ========= */
-const DB = (() => {
-  let dbp = null;
-  function open(){
-    if(dbp) return dbp;
-    dbp = new Promise((res,rej)=>{
-      const r = indexedDB.open("toir", 1);
-      r.onupgradeneeded = () => {
-        const d = r.result;
-        d.createObjectStore("inspections", {keyPath:"id"});
-        const ph = d.createObjectStore("photos", {keyPath:"id"}); ph.createIndex("insp","insp");
-        d.createObjectStore("equipment", {keyPath:"code"});
-        d.createObjectStore("meta");
-      };
-      r.onsuccess = () => res(r.result);
-      r.onerror = () => rej(r.error);
-    });
-    return dbp;
+  /* ---------- состояние ---------- */
+  let S = load();
+  function fresh() {
+    return { cfg: { email: D.EMAIL, staff: D.STAFF.map((s, i) => ({ ...s, id: "u" + i })), plan: JSON.parse(JSON.stringify(D.PLAN)) },
+      session: null, shift: null, defects: [], cD: 0, rounds: [], meas: [], mhist: {}, archive: [] };
   }
-  const tx = async (store, mode, fn) => {
-    const d = await open();
-    return new Promise((res,rej)=>{
-      const t = d.transaction(store, mode); let out;
-      Promise.resolve(fn(t)).then(v=>out=v);
-      t.oncomplete = () => res(out); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+  function load() { try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.cfg) return s; } catch (e) { } return fresh(); }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast("Память телефона заполнена: отправьте и закройте смену"); } }
+
+  /* ---------- фото: IndexedDB ---------- */
+  const IDB = (() => {
+    let p; const db = () => p || (p = new Promise((res, rej) => { const r = indexedDB.open("mdsz8", 1); r.onupgradeneeded = () => r.result.createObjectStore("photos"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }));
+    const tx = (mode, fn) => db().then(d => new Promise((res, rej) => { const t = d.transaction("photos", mode); const r = fn(t.objectStore("photos")); t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error); }));
+    return { put: (k, v) => tx("readwrite", s => s.put(v, k)), get: k => tx("readonly", s => s.get(k)) };
+  })();
+  function shrink(file) {
+    return new Promise((res, rej) => {
+      const img = new Image(), url = URL.createObjectURL(file);
+      img.onload = () => { const k = Math.min(1, 1600 / Math.max(img.width, img.height)); const c = document.createElement("canvas"); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url); c.toBlob(b => res(b), "image/jpeg", 0.8); };
+      img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("Не удалось открыть фото")); };
+      img.src = url;
     });
+  }
+
+  /* ---------- пользователь, смена ---------- */
+  const me = () => S.session && S.cfg.staff.find(s => s.id === S.session.id);
+  const role = () => (me() || {}).role;
+  const isView = () => !!(D.ROLES[role()] || {}).view;
+  const canEdit = () => ["Мастер смены", "Механик"].includes(role());
+  const shiftPrefix = () => `G8-${S.shift.date.replace(/-/g, "")}-${S.shift.no}`;
+  const kindShort = k => k === "Ремонтная" ? "Рем" : "Техн";
+  const isOpen = d => d.status === "Открыт" || d.status === "В работе";
+  const activeRound = () => S.rounds.find(r => !r.end && r.uid === S.session.id);
+  const done = r => Object.values(r.pts).filter(p => p.res !== "skip").length;
+
+  /* ---------- навигация ---------- */
+  let cur = { v: "login", p: null }, stack = [], ui = { tmp: {} };
+  function go(v, p, replace) { closeModal(); if (!replace) stack.push(cur); cur = { v, p }; history.pushState({}, ""); render(); window.scrollTo(0, 0); }
+  function back() { cur = stack.pop() || { v: S.session ? "home" : "login" }; render(); }
+  window.addEventListener("popstate", () => { if ($(".modal")) { closeModal(); history.pushState({}, ""); return; } if (cur.v === "home" || cur.v === "login") return; if (cur.v === "point") A.openRound(cur.p.rid); else back(); history.pushState({}, ""); });
+  function home() { stack = []; cur = { v: S.session ? "home" : "login" }; render(); window.scrollTo(0, 0); }
+
+  function render() {
+    if (S.session && Date.now() - S.session.ts > 13 * 3600e3) S.session = null;
+    if (!S.session && cur.v !== "login") cur = { v: "login" };
+    const f = V[cur.v] || V.home;
+    $("#app").innerHTML = f(cur.p) || "";
+    const t = $("#hdrTitle"); if (t) t.textContent = TITLES[cur.v] || "МДСЗ-8 · Обходы";
+    $("#hdrBack").hidden = cur.v === "home" || cur.v === "login";
+    $("#hdrUser").textContent = me() ? short(me().fio) : "";
+    $("#hdrOut").hidden = !S.session;
+    if (AFTER[cur.v]) AFTER[cur.v](cur.p);
+  }
+  const TITLES = { home: "МДСЗ-8 · Обходы", start: "Начало обхода", round: "Обход", point: "Осмотр КТ", defect: "Замечание", crit: "⛔ КРИТ",
+    map: "Светофор МДСЗ-8", kt: "Карточка КТ", defects: "Дефекты", dedit: "Дефект", shift: "Смена: план / факт", meas: "Замеры", close: "Закрыть смену",
+    send: "Отправка отчёта", archive: "Архив отчётов", settings: "Настройки", pick: "Выбор КТ", openShift: "Открыть смену" };
+
+  function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(t._h); t._h = setTimeout(() => t.hidden = true, 3500); }
+  function modal(html) { closeModal(); const m = document.createElement("div"); m.className = "modal"; m.innerHTML = `<div class="sheet">${html}</div>`; document.body.appendChild(m); m.addEventListener("click", e => { if (e.target === m) closeModal(); }); }
+  function closeModal() { const m = $(".modal"); if (m) m.remove(); }
+
+  /* ---------- экраны ---------- */
+  const V = {}, AFTER = {};
+
+  V.login = () => {
+    const groups = {};
+    S.cfg.staff.forEach(s => (groups[s.role] = groups[s.role] || []).push(s));
+    const sh = S.shift ? `<div class="note ok">Открыта смена: ${dmy(ymdToMs(S.shift.date))}, смена ${S.shift.no} · ${S.shift.kind}</div>` : `<div class="note">Смена не открыта — откроется после входа.</div>`;
+    return `<h2>Кто вы?</h2>${sh}` + Object.keys(D.ROLES).filter(r => groups[r]).map(r => `<div class="grp">${r}</div>` +
+      groups[r].map(s => `<button class="who" data-a="pickUser" data-v="${s.id}">${esc(short(s.fio))}${/\(пример\)/.test(s.fio) ? `<small>демо · ПИН ${esc(s.pin)}</small>` : ""}</button>`).join("")).join("") +
+      `<p class="muted center">Версия: ${APPV}. Данные хранятся на этом телефоне.</p>`;
   };
-  const req = r => new Promise((res,rej)=>{ r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); });
-  return {
-    all: s => tx(s,"readonly",t=>req(t.objectStore(s).getAll())),
-    get: (s,k) => tx(s,"readonly",t=>req(t.objectStore(s).get(k))),
-    put: (s,v,k) => tx(s,"readwrite",t=>{ k===undefined ? t.objectStore(s).put(v) : t.objectStore(s).put(v,k); }),
-    putMany: (s,arr) => tx(s,"readwrite",t=>{ const o=t.objectStore(s); arr.forEach(v=>o.put(v)); }),
-    del: (s,k) => tx(s,"readwrite",t=>{ t.objectStore(s).delete(k); }),
-    photosOf: insp => tx("photos","readonly",t=>req(t.objectStore("photos").index("insp").getAll(insp))),
-    keys: s => tx(s,"readonly",t=>req(t.objectStore(s).getAllKeys()))
-  };
-})();
 
-/* ========= Состояние ========= */
-let equipment = [], records = [], meta = {mechanic:"", shift:"1", device:""};
-let view = {name:"home"}, form = null;
-const photoCache = {};
-
-const $ = s => document.querySelector(s);
-const esc = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-function toast(t){const e=$("#toast");e.textContent=t;e.hidden=false;clearTimeout(toast.h);toast.h=setTimeout(()=>e.hidden=true,3000)}
-const fmt = ts => {const d=new Date(ts);return d.toLocaleDateString("ru-RU")+" "+d.toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})};
-const uidGen = () => Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,8);
-const eqBy = c => equipment.find(u=>u.code===c);
-const modelOf = u => MODELS[u&&u.model];
-const lastOf = code => records.find(r=>r.eq===code);
-const totalOf = m => m.nodes.reduce((s,n)=>s+n.items.length,0);
-const sites = () => [...new Set(equipment.map(e=>e.site))];
-const unsent = () => records.filter(r=>!r.sentAt && r.device===meta.device);
-
-async function loadAll(){
-  const local = await DB.all("equipment");
-  const base = (window.EQUIPMENT||[]).map(e=>({...e, source:"base"}));
-  const codes = new Set(base.map(e=>e.code));
-  equipment = [...base, ...local.filter(e=>!codes.has(e.code))]
-    .sort((a,b)=>(a.site+a.code).localeCompare(b.site+b.code,"ru"));
-  records = (await DB.all("inspections")).sort((a,b)=>b.ts-a.ts);
-}
-async function saveMeta(){ await DB.put("meta", meta, "meta"); }
-
-function go(v){view=v;render();window.scrollTo(0,0)}
-
-/* ========= Отрисовка ========= */
-function render(){
-  const v=$("#view"); $("#savebar").hidden = view.name!=="inspect";
-  $("#backBtn").hidden = !["card","inspect"].includes(view.name);
-  $("#scanBtn").hidden = view.name==="inspect";
-  const u = (view.name==="card"||view.name==="inspect") ? eqBy(view.code) : null;
-  $("#topTitle").innerHTML = u ? `<small>${esc(u.site)}</small>${esc(u.model)} · <span class="mono">${esc(u.code)}</span>`
-    : `<small><span class="statusdot ${navigator.onLine?"":"off"}"></span>${navigator.onLine?"в сети":"без сети — всё сохраняется на телефоне"}</small>Журнал ТОиР`;
-  if(view.name==="home") v.innerHTML=homeHTML();
-  else if(view.name==="card") v.innerHTML=u?cardHTML(u):missingHTML();
-  else if(view.name==="inspect") {v.innerHTML=inspectHTML(); updateProgress();}
-  else if(view.name==="remarks") v.innerHTML=remarksHTML();
-  else if(view.name==="journal") v.innerHTML=journalHTML();
-  else if(view.name==="labels") v.innerHTML=labelsHTML();
-  else if(view.name==="sync") v.innerHTML=syncHTML();
-  drawQR();
-}
-function missingHTML(){return `<div class="panel stack" style="margin-top:14px"><h2>Агрегат ${esc(view.code)} не найден</h2><div class="note">Такого кода нет в справочнике на этом телефоне. Проверьте метку или добавьте агрегат на вкладке «Оборудование и QR».</div></div>`}
-
-function tabs(active){
-  const n=unsent().length;
-  const t=[["home","Сводка"],["remarks","Замечания"],["journal","Журнал"],["sync",`Передача${n?` (${n})`:""}`],["labels","Оборудование и QR"]];
-  return `<nav class="tabs">${t.map(([k,l])=>`<button data-go="${k}" aria-pressed="${k===active}">${l}</button>`).join("")}</nav>`;
-}
-function statusPill(code){
-  const r=lastOf(code);
-  if(!r) return `<span class="pill p-none">нет осмотров</span>`;
-  return `<span class="pill ${VPILL[r.verdict]}">${VERDICT[r.verdict]}</span>`;
-}
-function openRemarks(){ const out=[]; records.forEach(r=>(r.remarks||[]).forEach((x,i)=>{ if(!x.closed) out.push({r,x,i}); })); return out; }
-
-function homeHTML(){
-  const week=Date.now()-7*864e5;
-  const insp7=records.filter(r=>r.ts>=week).length;
-  const open=openRemarks().length;
-  const bad=equipment.filter(e=>{const r=lastOf(e.code);return r&&r.verdict==="bad"}).length;
-  const notInsp=equipment.filter(e=>{const r=lastOf(e.code);return !r||r.ts<week}).length;
-  const n=unsent().length;
-  return tabs("home")+`<div class="stack">
-  ${!meta.mechanic?`<div class="panel stack"><div class="lbl">Первый запуск</div><label class="stack" style="gap:4px"><span>Ваше ФИО — будет подставляться в осмотры и файлы передачи</span><input type="text" id="mechFirst" placeholder="Иванов И.И."></label><button class="btn" id="mechFirstSave">Сохранить</button></div>`:""}
-  ${n?`<div class="banner"><span>Не передано осмотров: <b>${n}</b></span><button class="btn sm" data-go="sync">Передать</button></div>`:""}
-  <div class="kpis">
-    <div class="kpi"><span class="lbl">Агрегатов</span><b>${equipment.length}</b></div>
-    <div class="kpi"><span class="lbl">Осмотров за 7 дн.</span><b>${insp7}</b></div>
-    <div class="kpi ${open?"warn":""}"><span class="lbl">Открытых замечаний</span><b>${open}</b></div>
-    <div class="kpi ${bad?"bad":""}"><span class="lbl">Неисправны</span><b>${bad}</b></div>
-  </div>
-  ${notInsp?`<div class="note">Без осмотра более 7 дней: ${notInsp} из ${equipment.length}</div>`:""}
-  <div class="panel stack">
-    <div class="lbl">Открыть агрегат</div>
-    <button class="btn" id="scanBig">Сканировать QR-метку</button>
-    <div class="row"><input type="text" id="codeInput" placeholder="Код с метки" autocomplete="off" style="flex:1 1 180px;text-transform:uppercase"><button class="btn sec sm" id="codeGo">Открыть</button></div>
-  </div>
-  ${sites().map(s=>{const list=equipment.filter(e=>e.site===s);return `<div class="site-h"><span class="lbl">${esc(s)}</span><span class="note mono">${list.length} ед.</span></div>
-   ${list.map(u=>{const r=lastOf(u.code);return `<button class="unit" data-open="${esc(u.code)}">
-    <span class="tag">${esc(u.code)}</span>
-    <span class="m"><b>${esc(u.model)} · ${esc(u.pos)}</b><span class="note">${r?`Осмотр ${fmt(r.ts)} · ${esc(r.mechanic)}`:"Осмотров ещё не было"}</span><span style="display:block;margin-top:4px">${statusPill(u.code)}</span></span></button>`}).join("")}`}).join("")}
-  </div>`;
-}
-
-function cardHTML(u){
-  const m=modelOf(u); const hist=records.filter(r=>r.eq===u.code);
-  return `<div class="stack" style="margin-top:14px">
-  <div class="panel">
-    <div class="row" style="justify-content:space-between"><h2>${esc(m?m.kind:"")} ${esc(u.model)}</h2>${statusPill(u.code)}</div>
-    <div class="note">${esc(u.pos)} · ${esc(u.site)}${m?` · ${m.alias}`:""}${u.inv?` · инв. № ${esc(u.inv)}`:""}</div>
-    ${m?`<div class="specs">${m.specs.map(([k,v])=>`<div><span class="lbl">${k}</span><b>${v}</b></div>`).join("")}</div>`:""}
-  </div>
-  ${m?`<button class="btn" data-inspect="${esc(u.code)}">Начать осмотр · ${totalOf(m)} пунктов</button>`:`<div class="panel note">Для модели ${esc(u.model)} ещё нет чек-листа.</div>`}
-  <details class="panel"><summary class="lbl" style="cursor:pointer">QR-метка этого агрегата</summary>
-    <div class="qr" style="margin-top:10px;max-width:240px"><img alt="QR ${esc(u.code)}" data-qr="${esc(u.code)}"><div class="c">${esc(u.code)}</div><div class="d">${esc(u.model)} · ${esc(u.site)}</div></div>
-    <button class="btn sec sm" data-labels="${esc(u.code)}" style="margin-top:10px">Скачать метку для печати</button>
-  </details>
-  <div class="lbl" style="margin-top:6px">История осмотров · ${hist.length}</div>
-  ${hist.length?hist.map(r=>recHTML(r,false)).join(""):`<div class="panel note">Осмотров ещё нет. Нажмите «Начать осмотр», чтобы внести первый.</div>`}
-  </div>`;
-}
-function recHTML(r,showEq){
-  const u=eqBy(r.eq); const rems=r.remarks||[];
-  return `<div class="rec">
-   <div class="h"><span class="pill ${VPILL[r.verdict]}">${VERDICT[r.verdict]}</span>${showEq?`<span class="tag">${esc(r.eq)}</span>`:""}<span class="mono note">${fmt(r.ts)}</span>${r.device===meta.device&&!r.sentAt?`<span class="pill p-warn">не передан</span>`:""}</div>
-   <div class="note">${esc(r.mechanic)}${r.shift?` · смена ${esc(r.shift)}`:""}${showEq?` · ${esc(r.model||(u&&u.model)||"")} · ${esc(r.site||(u&&u.site)||"")}`:""}</div>
-   <div class="note mono">Щель ${r.gap??"—"} мм · t подш. Л ${r.tL??"—"} / П ${r.tR??"—"} °C</div>
-   ${rems.length?`<ul>${rems.map(x=>`<li><b>${esc(x.node)}:</b> ${esc(x.text)}${x.closed?` <span class="pill p-ok">устранено ${new Date(x.closed.ts).toLocaleDateString("ru-RU")}</span>`:""}</li>`).join("")}</ul>`:`<div class="note">Замечаний нет</div>`}
-   ${r.note?`<div>${esc(r.note)}</div>`:""}
-   ${r.photos?`<div class="thumbs" id="ph-${esc(r.id)}"><button class="btn sec sm" data-photos="${esc(r.id)}">Показать фото (${r.photos})</button></div>`:""}
-  </div>`;
-}
-
-/* ========= Осмотр ========= */
-function newForm(code){ return {eq:code, res:{}, chips:{}, notes:{}, photos:[], gap:"", tL:"", tR:"", verdict:null, verdictTouched:false, mechanic:meta.mechanic, shift:meta.shift||"1", note:""}; }
-const curModel = () => modelOf(eqBy(form.eq));
-function inspectHTML(){
-  const f=form, m=curModel();
-  return `<div class="stack" style="margin-top:14px">
-  <div class="panel grid2">
-    <label><span class="lbl">Механик (ФИО)</span><input type="text" id="mech" value="${esc(f.mechanic)}" placeholder="Иванов И.И."></label>
-    <label><span class="lbl">Смена</span><select id="shift">${["1","2","3"].map(s=>`<option ${f.shift===s?"selected":""}>${s}</option>`).join("")}</select></label>
-  </div>
-  <div class="panel stack">
-    <div class="lbl">Замеры</div>
-    <div class="grid2">
-      <label><span>Выходная щель, мм</span><input type="number" inputmode="decimal" id="gap" value="${esc(f.gap)}" placeholder="${m.gap[0]}–${m.gap[1]}"><span class="hint" id="gapHint"></span></label>
-      <label><span>t подшипника лев., °C</span><input type="number" inputmode="decimal" id="tL" value="${esc(f.tL)}"><span class="hint" id="tLHint"></span></label>
-      <label><span>t подшипника прав., °C</span><input type="number" inputmode="decimal" id="tR" value="${esc(f.tR)}"><span class="hint" id="tRHint"></span></label>
-    </div>
-  </div>
-  <div class="row" style="justify-content:space-between"><span class="lbl">Узлы · ${m.nodes.length}</span><button class="chip" id="allOk">Отметить остальное «Норма»</button></div>
-  ${m.nodes.map((n,i)=>nodeHTML(n,i)).join("")}
-  <div class="panel stack">
-    <div class="lbl">Итог осмотра</div>
-    <div class="verdict">${Object.entries(VERDICT).map(([k,l])=>`<button data-v="${k}" class="${f.verdict===k?"on":""}">${l}</button>`).join("")}</div>
-    <textarea id="note" rows="3" placeholder="Общий комментарий, принятые меры">${esc(f.note)}</textarea>
-    ${photoBlock("")}
-  </div>
-  </div>`;
-}
-function photoBlock(node){
-  const ph=form.photos.map((p,i)=>({p,i})).filter(o=>o.p.node===node);
-  return `<div class="row" data-phblock="${node}">
-    <label class="photo-btn">📷 Добавить фото<input type="file" accept="image/*" capture="environment" data-addphoto="${node}"></label>
-    <div class="thumbs">${ph.map(o=>`<div class="thumb"><img src="${o.p.data}" alt="Фото" data-zoom="1"><button data-delphoto="${o.i}" aria-label="Удалить фото">×</button></div>`).join("")}</div>
-  </div>`;
-}
-function nodeHTML(n,i){
-  const f=form; const bad=n.items.some(([id])=>f.res[id]==="bad");
-  const done=n.items.filter(([id])=>f.res[id]).length;
-  const sel=f.chips[n.id]||[];
-  return `<details class="node ${bad?"has-bad":""}" id="node-${n.id}" ${bad||done<n.items.length?"open":""}>
-   <summary><span class="n">${String(i+1).padStart(2,"0")}</span><h3>${n.t}</h3><span class="mono note">${done}/${n.items.length}</span></summary>
-   <div class="body">
-    ${n.items.map(([id,q])=>`<div class="item"><span class="q">${q}</span><span class="seg">
-      <button class="ok ${f.res[id]==="ok"?"on":""}" data-res="${id}" data-val="ok">Норма</button>
-      <button class="bad ${f.res[id]==="bad"?"on":""}" data-res="${id}" data-val="bad">Замечание</button></span></div>`).join("")}
-    ${bad?`<div class="lbl">Типовые замечания</div>
-      <div class="chips">${n.rem.map(r=>`<button class="chip" data-chip="${n.id}" data-text="${esc(r)}" aria-pressed="${sel.includes(r)}">${esc(r)}</button>`).join("")}</div>
-      <input type="text" data-nnote="${n.id}" value="${esc(f.notes[n.id]||"")}" placeholder="Уточнение по узлу (необязательно)">
-      ${photoBlock(n.id)}`:""}
-   </div></details>`;
-}
-function autoVerdict(){
-  if(form.verdictTouched) return;
-  const anyBad=Object.values(form.res).includes("bad");
-  form.verdict = Object.keys(form.res).length? (anyBad?"warn":"ok") : null;
-  document.querySelectorAll(".verdict button").forEach(b=>b.classList.toggle("on",b.dataset.v===form.verdict));
-}
-function updateProgress(){
-  const m=curModel();
-  $("#prog").textContent=`${Object.keys(form.res).length}/${totalOf(m)}`;
-  const g=parseFloat(form.gap), gh=$("#gapHint");
-  if(gh){const out=!isNaN(g)&&(g<m.gap[0]||g>m.gap[1]); gh.textContent=out?`Вне диапазона ${m.gap[0]}–${m.gap[1]} мм`:`Диапазон ${m.gap[0]}–${m.gap[1]} мм`; gh.className="hint"+(out?" bad":"")}
-  ["tL","tR"].forEach(k=>{const h=$("#"+k+"Hint"); if(!h) return; const t=parseFloat(form[k]); const hot=!isNaN(t)&&t>m.tMax;
-    h.textContent=hot?`Выше ${m.tMax} °C — проверьте`:`Ориентир до ${m.tMax} °C`; h.className="hint"+(hot?" bad":"")});
-}
-function rerenderNode(id){
-  const m=curModel(); const i=m.nodes.findIndex(n=>n.id===id); const el=$("#node-"+id);
-  const tmp=document.createElement("div"); tmp.innerHTML=nodeHTML(m.nodes[i],i);
-  const nw=tmp.firstElementChild; nw.open=true; el.replaceWith(nw);
-}
-function rerenderPhotos(node){
-  const el=document.querySelector(`[data-phblock="${node}"]`); if(!el) return;
-  const tmp=document.createElement("div"); tmp.innerHTML=photoBlock(node); el.replaceWith(tmp.firstElementChild);
-}
-function compress(file){
-  return new Promise((res,rej)=>{
-    const img=new Image(); const url=URL.createObjectURL(file);
-    img.onload=()=>{
-      let max=1280, q=0.75, out="";
-      for(let k=0;k<5;k++){
-        const s=Math.min(1,max/Math.max(img.width,img.height));
-        const c=document.createElement("canvas"); c.width=Math.round(img.width*s); c.height=Math.round(img.height*s);
-        c.getContext("2d").drawImage(img,0,0,c.width,c.height);
-        out=c.toDataURL("image/jpeg",q);
-        if(out.length<350000) break; max=Math.round(max*0.8); q=Math.max(0.5,q-0.07);
-      }
-      URL.revokeObjectURL(url); res(out);
+  V.home = () => {
+    const u = me(), R = D.ROLES[u.role], ar = activeRound();
+    let h = shiftBar();
+    if (ar) h += `<button class="big go" data-a="openRound" data-v="${ar.id}">▶ Продолжить: ${esc(ar.route)}<small>${done(ar) + Object.values(ar.pts).filter(p => p.res === "skip").length} из ${ar.list.length} КТ · идёт ${mins(ar.start)} мин</small></button>`;
+    const crit = S.defects.filter(d => isOpen(d) && d.cat === "Критический").length;
+    if (crit) h += `<div class="note bad">⛔ Открытых критических дефектов: ${crit}</div>`;
+    const L = {
+      P: ["П — перед пуском", `${D.ORDER_P.length} КТ · ≈${D.ROUTES.P.norm} мин`],
+      PE: ["П — электрика", `${D.ORDER_P.length} КТ · ≈${D.ROUTES.PE.norm} мин`],
+      C: [u.role === "Мастер смены" ? "С — полный обход мастера" : "С — сменный обход", `${D.ORDER_C.length} КТ · ≈${D.ROUTES.C.norm} мин · с замерами`],
+      CE: ["С — электрика", `${D.ORDER_C.length} КТ · ≈${D.ROUTES.CE.norm} мин`],
+      R: ["Р — полный осмотр", `${D.ORDER_C.length} КТ · ≈${D.ROUTES.R.norm} мин`],
+      RA: ["Р — приёмка после ремонта", "только отремонтированные КТ"],
+      V: ["В — внеплановый осмотр", "выбрать КТ"],
+      report: ["⚠ Сообщить о дефекте", "вне обхода"],
+      map: ["🚦 Светофор", "состояние КТ на схеме"],
+      shift: ["📋 Смена", "план / факт, кто у пульта"],
+      defects: [u.role === "Механик" ? "🛠 Дефекты в работу" : "🛠 Дефекты", u.role === "Заместитель начальника ПК" ? "просмотр" : "ответственный, срок, закрытие"],
+      meas: ["🌡 Замеры", "температуры, вне нормы"],
+      close: ["📨 Закрыть смену и отправить", S.cfg.email],
+      settings: ["⚙ Настройки", "люди, ПИН, почта"],
     };
-    img.onerror=()=>{URL.revokeObjectURL(url);rej()};
-    img.src=url;
-  });
-}
-async function save(){
-  const f=form, u=eqBy(f.eq), m=modelOf(u), total=totalOf(m);
-  f.mechanic=$("#mech").value.trim();
-  if(!f.mechanic){toast("Укажите ФИО механика");$("#mech").focus();return}
-  const missing=total-Object.keys(f.res).length;
-  if(missing>0){toast(`Не отмечено пунктов: ${missing}`);
-    const n=m.nodes.find(n=>n.items.some(([id])=>!f.res[id])); const el=$("#node-"+n.id); el.open=true; el.scrollIntoView({block:"center"}); return}
-  if(!f.verdict){toast("Выберите итог осмотра");return}
-  const remarks=[];
-  m.nodes.forEach(n=>{
-    const bads=n.items.filter(([id])=>f.res[id]==="bad"); if(!bads.length) return;
-    const txt=[...(f.chips[n.id]||[]), f.notes[n.id]].filter(Boolean);
-    remarks.push({node:n.t, text: txt.length?txt.join("; "):bads.map(b=>b[1]).join("; ")});
-  });
-  const num=v=>{const x=parseFloat(String(v).replace(",","."));return isNaN(x)?null:x};
-  const rec={id:uidGen(), eq:f.eq, model:u.model, site:u.site, pos:u.pos, ts:Date.now(), mechanic:f.mechanic, shift:f.shift, verdict:f.verdict,
-    gap:num(f.gap), tL:num(f.tL), tR:num(f.tR), results:f.res, remarks, note:f.note.trim(), photos:f.photos.length, device:meta.device, sentAt:null};
-  try{
-    await DB.put("inspections", rec);
-    if(f.photos.length) await DB.putMany("photos", f.photos.map((p,i)=>({id:rec.id+"-"+i, insp:rec.id, eq:rec.eq, node:p.node, data:p.data, ts:rec.ts})));
-    meta.mechanic=f.mechanic; meta.shift=f.shift; await saveMeta();
-    if(navigator.storage&&navigator.storage.persist) navigator.storage.persist().catch(()=>{});
-    records.unshift(rec); form=null;
-    toast("Осмотр сохранён на телефоне"); go({name:"card",code:rec.eq});
-  }catch(e){ toast("Не удалось сохранить: мало места в памяти телефона?"); }
-}
-async function showPhotos(id){
-  const box=document.getElementById("ph-"+id); if(!box) return;
-  const ph = photoCache[id] || (photoCache[id]=await DB.photosOf(id));
-  box.innerHTML=ph.length?ph.map(p=>`<div class="thumb"><img src="${p.data}" alt="Фото" data-zoom="1"></div>`).join(""):`<span class="note">Фото на этом устройстве нет</span>`;
-}
-
-/* ========= Замечания ========= */
-function remarksHTML(){
-  const all=!!view.all; const list=[];
-  records.forEach(r=>(r.remarks||[]).forEach((x,i)=>{ if(all||!x.closed) list.push({r,x,i}); }));
-  return tabs("remarks")+`<div class="stack">
-   <div class="row"><button class="chip" data-rshow="open" aria-pressed="${!all}">Открытые</button><button class="chip" data-rshow="all" aria-pressed="${all}">Все</button></div>
-   ${list.length?list.map(({r,x,i})=>`<div class="rem ${x.closed?"closed":""}"><div class="m">
-      <div class="row"><span class="tag">${esc(r.eq)}</span><span class="note mono">${fmt(r.ts)}</span></div>
-      <div style="margin-top:4px"><b>${esc(x.node)}:</b> ${esc(x.text)}</div>
-      <div class="note">${esc(r.site||"")} · выявил ${esc(r.mechanic)}${x.closed?` · устранено ${fmt(x.closed.ts)}, ${esc(x.closed.by)}`:""}</div></div>
-      ${!x.closed?`<button class="btn sec sm" data-close="${esc(r.id)}" data-idx="${i}">Устранено</button>`:""}
-    </div>`).join(""):`<div class="panel note">${all?"Замечаний пока нет.":"Открытых замечаний нет."}</div>`}
-  </div>`;
-}
-async function closeRemark(id,idx){
-  const r=records.find(x=>x.id===id); if(!r) return;
-  r.remarks=r.remarks.map((x,i)=>i===idx?{...x,closed:{ts:Date.now(),by:meta.mechanic||"—"}}:x);
-  r.updatedAt=Date.now(); if(r.device===meta.device) r.sentAt=null;
-  await DB.put("inspections", r); toast("Отмечено как устранённое"); render();
-}
-
-/* ========= Журнал и Excel ========= */
-function journalHTML(){
-  const flt=view.flt||"";
-  const list=records.filter(r=>!flt||r.eq===flt||r.site===flt);
-  return tabs("journal")+`<div class="stack">
-   <div class="row"><select id="flt" style="flex:1 1 220px"><option value="">Всё оборудование</option>
-     ${sites().map(s=>`<optgroup label="${esc(s)}"><option value="${esc(s)}" ${flt===s?"selected":""}>Весь участок: ${esc(s)}</option>${equipment.filter(e=>e.site===s).map(e=>`<option value="${esc(e.code)}" ${flt===e.code?"selected":""}>${esc(e.code)} · ${esc(e.model)}</option>`).join("")}</optgroup>`).join("")}</select>
-   <button class="btn sm" id="exportBtn" ${records.length?"":"disabled"}>Выгрузить в Excel</button></div>
-   <div class="note">Записей: ${list.length}</div>
-   ${list.length?list.map(r=>recHTML(r,true)).join(""):`<div class="panel note">Журнал пуст. Отсканируйте метку и проведите первый осмотр.</div>`}
-  </div>`;
-}
-async function saveFile(blob, name){
-  const file = new File([blob], name, {type: blob.type || "application/octet-stream"});
-  if(navigator.canShare && navigator.canShare({files:[file]})){
-    try{ await navigator.share({files:[file], title:name}); return "shared"; }
-    catch(e){ if(e && e.name==="AbortError") return "cancel"; }
+    h += `<div class="tiles">` + R.btn.map(b => {
+      const isRoute = !!D.ROUTES[b]; const pf = isRoute ? planFact(b, u.role) : "";
+      const dis = (isRoute || b === "report") && (!S.shift || ar) ? " disabled" : "";
+      return `<button class="tile ${isRoute ? "route" : ""} ${b === "report" ? "warn" : ""} ${b === "close" ? "send" : ""}" data-a="homeBtn" data-v="${b}"${dis}><b>${L[b][0]}</b><small>${esc(L[b][1])}${pf}</small></button>`;
+    }).join("") + `</div>`;
+    if (!S.shift && !isView()) h += `<button class="big" data-a="openShiftForm">Открыть смену</button>`;
+    return h;
+  };
+  function shiftBar() {
+    if (!S.shift) return `<div class="note">Смена не открыта</div>`;
+    const p = S.shift.pultLog.length ? short(S.shift.pultLog[S.shift.pultLog.length - 1].fio) : "—";
+    return `<div class="shiftbar"><b>${dmy(ymdToMs(S.shift.date))} · смена ${S.shift.no} · ${S.shift.kind}</b><span>У пульта: ${esc(p)}</span></div>`;
   }
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click();
-  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000); return "downloaded";
-}
-const stamp = () => { const d=new Date(), p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`; };
-function exportXLSX(){
-  const flt=view.name==="journal"?(view.flt||""):""; const list=records.filter(r=>!flt||r.eq===flt||r.site===flt);
-  const d=ts=>new Date(ts).toLocaleString("ru-RU");
-  const insp=[["Дата","Код","Участок","Модель","Позиция","Механик","Смена","Итог","Щель, мм","t лев, °C","t прав, °C","Замечаний","Открыто","Фото","Комментарий"],
-    ...list.map(r=>{const u=eqBy(r.eq)||{};return [d(r.ts),r.eq,r.site||u.site,r.model||u.model,r.pos||u.pos,r.mechanic,r.shift,VERDICT[r.verdict],r.gap,r.tL,r.tR,(r.remarks||[]).length,(r.remarks||[]).filter(x=>!x.closed).length,r.photos||0,r.note]})];
-  const rems=[["Дата выявления","Код","Участок","Узел","Замечание","Выявил","Статус","Дата устранения","Устранил"]];
-  list.forEach(r=>(r.remarks||[]).forEach(x=>rems.push([d(r.ts),r.eq,r.site,x.node,x.text,r.mechanic,x.closed?"Устранено":"Открыто",x.closed?d(x.closed.ts):"",x.closed?x.closed.by:""])));
-  const eqs=[["Код","Участок","Модель","Позиция","Инв. №","Последний осмотр","Состояние"],
-    ...equipment.map(e=>{const r=lastOf(e.code);return [e.code,e.site,e.model,e.pos,e.inv||"",r?d(r.ts):"",r?VERDICT[r.verdict]:"нет осмотров"]})];
-  const blob=XLSXLite.build([
-    {name:"Осмотры",cols:[18,11,22,10,28,20,6,26,9,9,9,10,8,6,40],rows:insp},
-    {name:"Замечания",cols:[18,11,22,34,44,20,11,18,20],rows:rems},
-    {name:"Оборудование",cols:[11,22,10,30,10,18,26],rows:eqs}]);
-  saveFile(blob, `Агрегатный_журнал_${stamp()}.xlsx`);
-}
+  function planFact(rkey, roleName) {
+    if (!S.shift) return "";
+    const pl = (S.cfg.plan[S.shift.kind] || []).find(x => x[0] === rkey && x[1] === roleName);
+    const f = S.rounds.filter(r => r.end && r.rkey === rkey && r.role === roleName).length;
+    return pl ? ` · сделано ${f} из ${pl[2]}` : (f ? ` · сделано ${f}` : "");
+  }
+  const mins = t => Math.max(0, Math.round((Date.now() - t) / 60000));
 
-/* ========= Передача данных ========= */
-function syncHTML(){
-  const n=unsent().length, last=meta.lastSent;
-  return tabs("sync")+`<div class="stack">
-   <div class="panel stack">
-     <h3>Передать осмотры мастеру</h3>
-     <div class="note">Файл с осмотрами и фото уходит через мессенджер, почту или сохраняется в «Файлы». Интернет нужен только в момент отправки.</div>
-     <div>Новых осмотров: <b class="mono">${n}</b>${last?` · последняя передача ${fmt(last)}`:""}</div>
-     <button class="btn" id="sendNew" ${n?"":"disabled"}>Отправить новые (${n})</button>
-     <button class="btn sec" id="sendAll" ${records.length?"":"disabled"}>Отправить всё (резервная копия)</button>
-   </div>
-   <div class="panel stack">
-     <h3>Собрать файлы от механиков</h3>
-     <div class="note">На компьютере мастера: выберите сразу все полученные файлы .json. Повторы не задваиваются, статусы «устранено» объединяются.</div>
-     <label class="photo-btn" style="align-self:flex-start">Выбрать файлы…<input type="file" id="importFiles" accept=".json,application/json" multiple></label>
-     <div id="importRes" class="note"></div>
-   </div>
-   <div class="panel stack">
-     <h3>Отчёт в Excel</h3>
-     <div class="note">Три листа: осмотры, замечания со статусом, оборудование.</div>
-     <button class="btn sec" id="exportAll" ${records.length?"":"disabled"}>Выгрузить всё в Excel</button>
-   </div>
-   <div class="note">Устройство: <span class="mono">${esc(meta.device)}</span> · осмотров в памяти: ${records.length}</div>
-  </div>`;
-}
-async function sendData(onlyNew){
-  const list = onlyNew ? unsent() : records.slice();
-  if(!list.length){toast("Нет осмотров для передачи");return}
-  const photos=[]; for(const r of list){ if(r.photos) photos.push(...await DB.photosOf(r.id)); }
-  const localEq = equipment.filter(e=>e.source!=="base");
-  const payload={format:"toir-export", version:1, device:meta.device, mechanic:meta.mechanic, created:Date.now(),
-    inspections:list.map(r=>{const {sentAt,...x}=r; return x;}), photos, equipment:localEq};
-  const who=(meta.mechanic||"механик").replace(/[^\p{L}\p{N}]+/gu,"_");
-  const res=await saveFile(new Blob([JSON.stringify(payload)],{type:"application/json"}), `ТОиР_${who}_${stamp()}.json`);
-  if(res==="cancel") return;
-  const now=Date.now();
-  for(const r of list){ if(r.device===meta.device && !r.sentAt){ r.sentAt=now; await DB.put("inspections", r); } }
-  meta.lastSent=now; await saveMeta();
-  toast(res==="shared"?"Файл передан":"Файл сохранён — отправьте его мастеру"); render();
-}
-async function importFiles(files){
-  let added=0, updated=0, bad=0, ph=0, eqAdded=0;
-  const existing = new Map(records.map(r=>[r.id,r]));
-  const photoKeys = new Set(await DB.keys("photos"));
-  for(const f of files){
-    let data; try{ data=JSON.parse(await f.text()); }catch(e){ bad++; continue; }
-    if(!data || data.format!=="toir-export"){ bad++; continue; }
-    for(const r of data.inspections||[]){
-      const cur=existing.get(r.id);
-      if(!cur){ const x={...r, sentAt:r.device===meta.device?Date.now():null}; await DB.put("inspections",x); existing.set(r.id,x); added++; }
-      else{
-        let changed=false;
-        const rem=(cur.remarks||[]).map((x,i)=>{ const o=(r.remarks||[])[i]; if(!x.closed&&o&&o.closed){changed=true;return {...x,closed:o.closed}} return x; });
-        if(changed){ cur.remarks=rem; await DB.put("inspections",cur); updated++; }
-      }
+  /* --- открытие смены --- */
+  V.openShift = () => {
+    const now = new Date(), h = now.getHours();
+    let date = ymd(now), no = "1";
+    if (h < 8) { date = addDays(now, -1); no = "2"; } else if (h >= 20) no = "2";
+    const kind = role() === "Механик" ? "Ремонтная" : "Технологическая";
+    return `<p>Проверьте данные смены. Они попадут в имя файла отчёта и в ID записей.</p>
+      <label>Дата начала смены<input type="date" id="shDate" value="${date}"></label>
+      <label>Смена №<select id="shNo"><option ${no === "1" ? "selected" : ""}>1</option><option ${no === "2" ? "selected" : ""}>2</option></select></label>
+      <div class="hint">1 — дневная 08:00–20:00, 2 — ночная 20:00–08:00</div>
+      <label>Вид смены<select id="shKind"><option ${kind === "Технологическая" ? "selected" : ""}>Технологическая</option><option ${kind === "Ремонтная" ? "selected" : ""}>Ремонтная</option></select></label>
+      <button class="big go" data-a="openShift">Открыть смену</button>`;
+  };
+
+  /* --- начало обхода --- */
+  V.start = p => {
+    const R = D.ROUTES[p.rkey], u = me();
+    let h = `<h2>${R.title}</h2>`;
+    if (p.rkey === "P") {
+      h += `<div class="grp">Объём</div>` + [["ALL", `Весь маршрут П — ${D.ORDER_P.length} КТ, ≈${R.norm} мин`], ["P1", `П-1 — КТ 1–6 (до маслостанции КСД), если дробильщиков двое`], ["P2", `П-2 — КТ 7–11 (КМД, ГИС-73 №2, ПЭВ-150, ПСУ)`]]
+        .map(([k, t]) => `<label class="radio"><input type="radio" name="part" value="${k}" ${k === "ALL" ? "checked" : ""}> ${t}</label>`).join("");
     }
-    const newPh=(data.photos||[]).filter(p=>!photoKeys.has(p.id));
-    if(newPh.length){ await DB.putMany("photos",newPh); newPh.forEach(p=>photoKeys.add(p.id)); ph+=newPh.length; }
-    for(const e of data.equipment||[]){ if(!eqBy(e.code)){ await DB.put("equipment",{...e,source:"import"}); eqAdded++; } }
+    if (R.pult) {
+      const cand = S.cfg.staff.filter(s => s.id !== u.id && ["Дробильщик", "Мастер смены", "Электрослесарь"].includes(s.role));
+      const last = S.shift.pultLog.length ? S.shift.pultLog[S.shift.pultLog.length - 1].fio : "";
+      h += `<div class="grp">Кто остаётся у пульта?</div>` + cand.map(s => `<label class="radio"><input type="radio" name="pult" value="${esc(s.fio)}" ${s.fio === last ? "checked" : ""}> ${esc(short(s.fio))} <small>— ${s.role}</small></label>`).join("") +
+        `<label class="radio"><input type="radio" name="pult" value="__other"> Другой: <input id="pultOther" placeholder="ФИО"></label>`;
+    }
+    if (p.rkey === "RA" || p.rkey === "V") {
+      const pre = p.rkey === "RA" ? new Set(S.defects.filter(d => d.status === "В работе" || (d.status === "Устранён" && d.changed >= S.shift.opened)).map(d => d.kt)) : new Set();
+      h += `<div class="grp">${p.rkey === "RA" ? "Отремонтированные КТ (отмечены по реестру дефектов)" : "Какие КТ осмотреть"}</div>` +
+        D.ORDER_C.map(c => `<label class="chk"><input type="checkbox" name="kts" value="${c}" ${pre.has(c) ? "checked" : ""}> ${esc(ktLabel(c))}</label>`).join("");
+    }
+    if (R.map) h += `<div class="grp">Карта маршрута</div><img class="map" src="${R.map}" alt="Карта маршрута" data-a="zoom" data-v="${R.map}"><div class="hint">Нажмите на карту, чтобы увеличить</div>`;
+    else if (p.rkey !== "V") h += "";
+    h += `<button class="big go" data-a="startRound" data-v="${p.rkey}">▶ Начать обход</button>`;
+    return h;
+  };
+
+  /* --- обход: список точек --- */
+  V.round = id => {
+    const r = S.rounds.find(x => x.id === id); if (!r) return home();
+    const nSkip = Object.values(r.pts).filter(p => p.res === "skip").length, el = mins(r.start);
+    let h = `<div class="rhead"><b>${esc(r.route)}</b><span class="${el > r.norm ? "red" : ""}">${el} / ${r.norm} мин</span><div class="bar"><i style="width:${Math.round(100 * Object.keys(r.pts).length / r.list.length)}%"></i></div><small>Осмотрено ${done(r)} · пропущено ${nSkip} · всего ${r.list.length}${r.pult ? " · у пульта " + esc(short(r.pult)) : ""}</small></div>`;
+    const next = r.list.find(c => !r.pts[c]);
+    if (next) h += `<button class="big go" data-a="openPoint" data-v="${next}">Следующая: ${esc(ktLabel(next))} →</button>`;
+    h += `<ol class="pts">` + r.list.map((c, i) => {
+      const p = r.pts[c]; const st = !p ? "" : p.res === "ok" ? "ok" : p.res === "skip" ? "skip" : "def";
+      const ico = !p ? "○" : p.res === "ok" ? "✓" : p.res === "skip" ? "—" : "✎";
+      return `<li class="${st}" data-a="openPoint" data-v="${c}"><span class="ico">${ico}</span><span><b>${i + 1}. ${esc(KT[c].name)}</b><small>${c}${p ? " · " + hm(p.t) + (p.reason ? " · " + esc(p.reason) : "") : ""}</small></span></li>`;
+    }).join("") + `</ol>`;
+    if (D.ROUTES[r.rkey].map) h += `<button class="btn" data-a="zoom" data-v="${D.ROUTES[r.rkey].map}">🗺 Карта маршрута</button>`;
+    h += `<button class="big ${next ? "" : "go"}" data-a="finishRound" data-v="${r.id}">■ Завершить обход</button>`;
+    return h;
+  };
+
+  /* --- контрольная точка --- */
+  V.point = ({ rid, kt }) => {
+    const r = S.rounds.find(x => x.id === rid), k = KT[kt], R = D.ROUTES[r.rkey], p = r.pts[kt];
+    const idx = r.list.indexOf(kt);
+    let h = `<div class="kthead"><small>${idx + 1} из ${r.list.length} · ${kt} · ${esc(typeName(kt))}</small><h2>${esc(k.name)}</h2></div>`;
+    const open = S.defects.filter(d => d.kt === kt && isOpen(d));
+    if (open.length) h += `<div class="note warn"><b>Известные открытые дефекты:</b>` + open.map(d => `<div>• ${esc(d.node)}: ${esc(d.desc)} <small>(${d.cat}, ${d.status})</small></div>`).join("") + `<small>Повторно не заводите — только если стало хуже.</small></div>`;
+    h += `<div class="grp">Осмотреть</div><ul class="cl">` + checklist(R.cl, k.type).map(t => `<li>${esc(t)}</li>`).join("") + `</ul>`;
+    const M = R.meas && D.MEAS[k.type];
+    if (M) {
+      h += `<div class="grp">Замеры пирометром</div>` + M.map(([pl, n], i) => {
+        const prev = lastMeas(kt, pl), v = (ui.tmp[kt] || {})[pl];
+        return `<div class="meas"><label>${esc(pl)} <small>норма ≤ ${n} °C${prev ? ` · прошлый ${prev.v} °C в ${hm(prev.ts)} ${dmy(prev.ts) !== dmy(Date.now()) ? dmy(prev.ts) : ""}` : ""}</small></label>
+          <div class="mrow"><input inputmode="decimal" id="m${i}" data-pl="${esc(pl)}" data-n="${n}" value="${v != null ? v : ""}" placeholder="°C"><span class="mst" id="ms${i}"></span></div></div>`;
+      }).join("");
+    }
+    if (p && p.defs && p.defs.length) h += `<div class="grp">Замечания в этой точке</div>` + p.defs.map(id => { const d = S.defects.find(x => x.id === id); return d ? `<div class="dcard c${catN(d.cat)}"><b>${esc(d.node)}</b> — ${esc(d.desc)}<small>${d.cat} · ${d.status}${d.photos.length ? " · 📷" + d.photos.length : ""}</small></div>` : ""; }).join("");
+    if (p && p.res === "skip") h += `<div class="note">Пропущено: ${esc(p.reason)}</div>`;
+    if (p && p.res === "ok") h += `<div class="note ok">✓ Отмечено в норме в ${hm(p.t)}</div>`;
+    h += `<div class="pbtns">`;
+    if (!p || p.res === "skip") h += `<button class="big go" data-a="pointOk">✓ Всё в норме</button>`;
+    h += `<button class="big warnb" data-a="pointDefect">✎ Есть замечание</button>`;
+    if (p && p.res === "def") h += `<button class="big go" data-a="pointNext">Далее →</button>`;
+    if (!p) h += `<button class="btn" data-a="pointSkip">Пропустить (указать причину)</button>`;
+    h += `<button class="btn" data-a="openRound" data-v="${rid}">☰ Список точек</button></div>`;
+    return h;
+  };
+  AFTER.point = () => { ui.okNoMeas = ui.okHot = false; document.querySelectorAll(".meas input").forEach(inp => { inp.addEventListener("input", () => measCheck(inp, false)); inp.addEventListener("change", () => measCheck(inp, true)); measCheck(inp, false); }); };
+  function checklist(cl, type) {
+    if (cl === "E") return type === "CABIN" || type === "PSU" ? D.CL.E[type] : [...D.CL.E.ALL, ...(D.CL.E[type] || [])];
+    if (cl === "R") return D.CL.R[type] || [...(D.CL.P[type] || []), ...(D.CL.C[type] || [])];
+    return D.CL[cl][type] || D.CL.C[type] || [];
   }
-  await loadAll();
-  render();
-  const res=$("#importRes"); if(res) res.textContent=`Новых осмотров: ${added} · обновлено: ${updated} · фото: ${ph}${eqAdded?` · агрегатов: ${eqAdded}`:""}${bad?` · не прочитано файлов: ${bad}`:""}`;
-  toast(`Загружено осмотров: ${added}`);
-}
-
-/* ========= Оборудование и QR ========= */
-const appBase = () => location.href.split("#")[0].replace(/index\.html$/,"");
-const linkFor = code => appBase()+"#"+code;
-function labelsHTML(){
-  const sel=view.sel||{};
-  return tabs("labels")+`<div class="stack">
-   <details class="panel"><summary class="lbl" style="cursor:pointer">+ Добавить агрегат и создать QR-метку</summary>
-   <div class="grid2" style="margin-top:10px">
-     <label><span class="lbl">Модель</span><select id="nModel">${Object.keys(MODELS).map(k=>`<option>${k}</option>`).join("")}</select></label>
-     <label><span class="lbl">Участок</span><input type="text" id="nSite" list="siteList" placeholder="МДСЗ-8 ПК Гаврилово"><datalist id="siteList">${sites().map(s=>`<option value="${esc(s)}">`).join("")}</datalist></label>
-     <label><span class="lbl">Позиция / назначение</span><input type="text" id="nPos" placeholder="Щековая дробилка, 1 стадия"></label>
-     <label><span class="lbl">Инв. номер</span><input type="text" id="nInv" placeholder="необязательно"></label>
-     <label><span class="lbl">Код метки</span><input type="text" id="nCode" placeholder="G8-SCH-2" style="text-transform:uppercase"><span class="hint">Латиница, цифры и дефис</span></label>
-   </div>
-   <button class="btn" id="addEq" style="margin-top:12px">Добавить и создать QR</button>
-   <div class="note" style="margin-top:8px">Агрегат добавится на этом устройстве и уйдёт другим вместе с файлом передачи. Чтобы он сразу был у всех, скачайте справочник и замените файл equipment.js на GitHub.</div>
-   <button class="btn sec sm" id="eqDl" style="margin-top:8px">Скачать справочник (equipment.js)</button>
-   </details>
-   <div class="row" style="justify-content:space-between"><span class="lbl">QR-метки · отмечено ${Object.keys(sel).length}</span>
-     <span class="row"><button class="chip" id="selAll">Выбрать все</button><button class="btn sm" id="labelsDl" ${equipment.length?"":"disabled"}>Лист для печати</button></span></div>
-   <div class="note">Если ничего не выбрано, на лист попадут все метки.</div>
-   <div class="qrgrid">${equipment.map(u=>`<label class="qr" style="cursor:pointer"><img alt="QR ${esc(u.code)}" data-qr="${esc(u.code)}"><div class="c">${esc(u.code)}</div><div class="d">${esc(u.model)} · ${esc(u.pos)}</div><div class="d">${esc(u.site)}</div>
-     <div style="margin-top:6px"><input type="checkbox" data-sel="${esc(u.code)}" ${sel[u.code]?"checked":""}> на печать</div></label>`).join("")}</div>
-  </div>`;
-}
-async function addEquipment(){
-  const code=$("#nCode").value.trim().toUpperCase(), site=$("#nSite").value.trim(), pos=$("#nPos").value.trim(), model=$("#nModel").value, inv=$("#nInv").value.trim();
-  if(!/^[A-Z0-9][A-Z0-9-]{1,30}$/.test(code)){toast("Код: латинские буквы, цифры и дефис");return}
-  if(!site||!pos){toast("Заполните участок и позицию");return}
-  if(eqBy(code)){toast("Такой код уже есть");return}
-  await DB.put("equipment",{code,site,pos,model,inv,source:"local",added:Date.now()});
-  await loadAll(); view.sel={...(view.sel||{}),[code]:true}; toast(`Агрегат ${code} добавлен`); render();
-}
-function downloadEquipmentJs(){
-  const rows=equipment.map(e=>`  { code: ${JSON.stringify(e.code)}, site: ${JSON.stringify(e.site)}, model: ${JSON.stringify(e.model)}, pos: ${JSON.stringify(e.pos)}, inv: ${JSON.stringify(e.inv||"")} }`).join(",\n");
-  const js=`/* СПРАВОЧНИК ОБОРУДОВАНИЯ — выгружен из приложения ${new Date().toLocaleString("ru-RU")}.\n   Замените им equipment.js на GitHub и увеличьте VERSION в sw.js. */\nwindow.EQUIPMENT = [\n${rows}\n];\n`;
-  saveFile(new Blob([js],{type:"text/javascript"}),"equipment.js");
-}
-function qrData(code){ const q=qrcode(0,"M"); q.addData(linkFor(code)); q.make(); return q.createDataURL(6,2); }
-function drawQR(){ document.querySelectorAll("img[data-qr]").forEach(i=>{ try{ i.src=qrData(i.dataset.qr); }catch(e){} }); }
-function downloadLabels(codes){
-  const list=equipment.filter(u=>!codes.length||codes.includes(u.code));
-  const cells=list.map(u=>`<div class="l"><img src="${qrData(u.code)}"><div class="c">${esc(u.code)}</div><div class="d"><b>${esc(u.model)}</b> · ${esc(u.pos)}</div><div class="d">${esc(u.site)}</div><div class="s">Осмотр: отсканируйте в приложении «Журнал ТОиР»</div></div>`).join("");
-  const html=`<!doctype html><html lang="ru"><meta charset="utf-8"><title>QR-метки</title><style>body{font-family:Arial,sans-serif;margin:10mm}.g{display:grid;grid-template-columns:repeat(3,60mm);gap:6mm}.l{border:1px dashed #888;padding:4mm;text-align:center;break-inside:avoid}.l img{width:42mm;height:42mm;image-rendering:pixelated}.c{font:bold 16pt monospace;margin-top:2mm}.d{font-size:9pt}.s{font-size:7pt;color:#555;margin-top:1mm}@media print{p{display:none}}</style><p>Откройте файл в браузере на компьютере и нажмите Ctrl+P. Метки лучше заламинировать.</p><div class="g">${cells}</div></html>`;
-  saveFile(new Blob([html],{type:"text/html"}),"QR-метки.html");
-}
-
-/* ========= Сканер QR ========= */
-let scanStream=null, scanTimer=null;
-async function openScanner(){
-  const ov=$("#scanner"), msg=$("#scanMsg"), video=$("#scanVideo");
-  ov.hidden=false; msg.textContent="Наведите камеру на QR-метку агрегата";
-  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){ msg.textContent="Камера недоступна. Введите код с метки вручную."; return; }
-  try{
-    scanStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1280}},audio:false});
-    video.srcObject=scanStream; await video.play();
-    const cv=$("#scanCanvas"), ctx=cv.getContext("2d",{willReadFrequently:true});
-    const tick=()=>{
-      if(!scanStream) return;
-      if(video.readyState>=2){
-        const w=640, h=Math.round(video.videoHeight*(w/video.videoWidth))||480;
-        cv.width=w; cv.height=h; ctx.drawImage(video,0,0,w,h);
-        const res=jsQR(ctx.getImageData(0,0,w,h).data,w,h,{inversionAttempts:"attemptBoth"});
-        if(res&&res.data){ return onScan(res.data); }
-      }
-      scanTimer=setTimeout(tick,180);
-    };
-    tick();
-  }catch(e){ msg.textContent="Нет доступа к камере. Разрешите камеру для приложения в настройках телефона."; }
-}
-function closeScanner(){
-  clearTimeout(scanTimer); if(scanStream){ scanStream.getTracks().forEach(t=>t.stop()); scanStream=null; }
-  $("#scanner").hidden=true;
-}
-function onScan(text){
-  let code=text.trim(); const i=code.lastIndexOf("#"); if(i>=0) code=code.slice(i+1);
-  code=decodeURIComponent(code).toUpperCase();
-  if(navigator.vibrate) navigator.vibrate(80);
-  closeScanner();
-  if(eqBy(code)) go({name:"card",code}); else toast(`Код ${code} не найден в справочнике`);
-}
-
-/* ========= События ========= */
-document.addEventListener("click",e=>{
-  const img=e.target.closest("img[data-zoom]"); if(img){$("#lbImg").src=img.src;$("#lightbox").hidden=false;return}
-  if(e.target.closest("#lightbox")){$("#lightbox").hidden=true;return}
-  const t=e.target.closest("button"); if(!t) return;
-  if(t.id==="backBtn"){ if(view.name==="inspect") go({name:"card",code:view.code}); else go({name:"home"}); return;}
-  if(t.id==="scanBtn"||t.id==="scanBig") return openScanner();
-  if(t.id==="scanClose") return closeScanner();
-  if(t.id==="updBtn"){ if(window.__waitingSW) window.__waitingSW.postMessage("skipWaiting"); return; }
-  if(t.dataset.go) return go({name:t.dataset.go});
-  if(t.dataset.open) return go({name:"card",code:t.dataset.open});
-  if(t.dataset.inspect){ form=newForm(t.dataset.inspect); return go({name:"inspect",code:t.dataset.inspect}); }
-  if(t.id==="codeGo"){ const c=$("#codeInput").value.trim().toUpperCase(); if(eqBy(c)) go({name:"card",code:c}); else toast("Код не найден. Проверьте метку."); return;}
-  if(t.id==="mechFirstSave"){ const v=$("#mechFirst").value.trim(); if(!v){toast("Введите ФИО");return} meta.mechanic=v; saveMeta().then(render); return; }
-  if(t.dataset.res){ const id=t.dataset.res; form.res[id]=t.dataset.val; const n=curModel().nodes.find(n=>n.items.some(x=>x[0]===id)); rerenderNode(n.id); autoVerdict(); updateProgress(); return;}
-  if(t.dataset.chip){ const a=form.chips[t.dataset.chip]||(form.chips[t.dataset.chip]=[]); const x=t.dataset.text; const k=a.indexOf(x); k<0?a.push(x):a.splice(k,1); t.setAttribute("aria-pressed",k<0); return;}
-  if(t.id==="allOk"){ curModel().nodes.forEach(n=>n.items.forEach(([id])=>{ if(!form.res[id]) form.res[id]="ok"; })); render(); autoVerdict(); return;}
-  if(t.dataset.v && view.name==="inspect"){ form.verdict=t.dataset.v; form.verdictTouched=true; document.querySelectorAll(".verdict button").forEach(b=>b.classList.toggle("on",b===t)); return;}
-  if(t.dataset.delphoto){ const p=form.photos.splice(+t.dataset.delphoto,1)[0]; rerenderPhotos(p.node); return;}
-  if(t.id==="saveBtn") return save();
-  if(t.dataset.photos) return showPhotos(t.dataset.photos);
-  if(t.dataset.rshow){ view.all=t.dataset.rshow==="all"; return render(); }
-  if(t.dataset.close) return closeRemark(t.dataset.close,+t.dataset.idx);
-  if(t.id==="exportBtn"||t.id==="exportAll") return exportXLSX();
-  if(t.id==="sendNew") return sendData(true);
-  if(t.id==="sendAll") return sendData(false);
-  if(t.id==="addEq") return addEquipment();
-  if(t.id==="eqDl") return downloadEquipmentJs();
-  if(t.id==="selAll"){ view.sel={}; equipment.forEach(u=>view.sel[u.code]=true); return render(); }
-  if(t.id==="labelsDl") return downloadLabels(Object.keys(view.sel||{}));
-  if(t.dataset.labels) return downloadLabels([t.dataset.labels]);
-});
-document.addEventListener("input",e=>{
-  if(!form||view.name!=="inspect") return; const el=e.target;
-  if(["gap","tL","tR"].includes(el.id)){form[el.id]=el.value;updateProgress()}
-  else if(el.id==="note") form.note=el.value;
-  else if(el.id==="mech") form.mechanic=el.value;
-  else if(el.dataset.nnote) form.notes[el.dataset.nnote]=el.value;
-});
-document.addEventListener("change",async e=>{
-  const el=e.target;
-  if(el.id==="shift"&&form) form.shift=el.value;
-  if(el.id==="flt"){ view.flt=el.value; render(); }
-  if(el.id==="importFiles"&&el.files&&el.files.length) return importFiles([...el.files]);
-  if(el.dataset.sel!==undefined){ view.sel=view.sel||{}; if(el.checked) view.sel[el.dataset.sel]=true; else delete view.sel[el.dataset.sel]; }
-  if(el.dataset.addphoto!==undefined && el.files && el.files[0]){
-    const node=el.dataset.addphoto;
-    if(form.photos.length>=8){toast("Не более 8 фото на осмотр");return}
-    try{ const data=await compress(el.files[0]); form.photos.push({node,data}); rerenderPhotos(node); }
-    catch(err){ toast("Не удалось прочитать фото"); }
-    el.value="";
+  const catN = c => c === "Критический" ? 1 : c === "Значительный" ? 2 : 3;
+  function lastMeas(kt, pl) { const a = S.mhist[kt + "|" + pl]; return a && a.length ? a[a.length - 1] : null; }
+  const num = s => { const v = parseFloat(String(s).replace(",", ".")); return isFinite(v) ? v : null; };
+  function measCheck(inp, final) {
+    const v = num(inp.value), n = +inp.dataset.n, pl = inp.dataset.pl, st = inp.parentNode.querySelector(".mst"), kt = cur.p.kt;
+    (ui.tmp[kt] = ui.tmp[kt] || {})[pl] = inp.value === "" ? null : inp.value;
+    inp.classList.remove("hi", "rise"); st.textContent = "";
+    if (v == null) return;
+    const prev = lastMeas(kt, pl);
+    if (v > n) { inp.classList.add("hi"); st.textContent = `выше нормы на ${Math.round((v - n) * 10) / 10}`; }
+    else if (prev && v - prev.v >= 15) { inp.classList.add("rise"); st.textContent = `рост +${Math.round((v - prev.v) * 10) / 10} °C`; }
+    if (final && v > n) {
+      modal(`<h3>🌡 ${esc(pl)}: ${v} °C</h3><p>Норма ≤ ${n} °C. Создать замечание?</p><button class="big warnb" data-a="hotDefect" data-v="${esc(pl)}">Да, создать замечание</button><button class="btn" data-a="closeModal">Нет</button>`);
+    } else if (final && prev && v - prev.v >= 15) toast(`Внимание: рост на ${Math.round((v - prev.v) * 10) / 10} °C к прошлому замеру (${prev.v} °C). Сообщите мастеру.`);
   }
-});
-document.addEventListener("keydown",e=>{ if(e.key==="Enter"&&e.target.id==="codeInput") $("#codeGo").click(); });
-window.addEventListener("online",()=>{ if(view.name!=="inspect") render(); });
-window.addEventListener("offline",()=>{ if(view.name!=="inspect") render(); });
-window.addEventListener("beforeunload",e=>{ if(form&&Object.keys(form.res).length){ e.preventDefault(); e.returnValue=""; } });
 
-function fromHash(){ const h=decodeURIComponent(location.hash.slice(1)).toUpperCase(); if(h&&eqBy(h)){ go({name:"card",code:h}); history.replaceState(null,"",location.pathname); } }
-window.addEventListener("hashchange",fromHash);
+  /* --- форма замечания --- */
+  V.defect = c => {
+    const k = KT[c.kt], T = D.TYPES[k.type], f = ui.form;
+    return `<div class="kthead"><small>${c.kt} · ${esc(T[0])} · ${esc(c.route)}</small><h2>${esc(k.name)}</h2></div>
+      <label>Узел<select id="fNode"><option value="">— выберите —</option>${T[1].map(n => `<option ${f.node === n ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
+      <label>Типовой дефект<select id="fDef"><option value="">— выберите —</option>${T[2].map(n => `<option ${f.def === n ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
+      <label>Уточнение (необязательно)<textarea id="fTxt" rows="2" placeholder="где именно, размер, значение">${esc(f.txt || "")}</textarea></label>
+      <div class="grp">Категория</div><div class="cats">${D.CATS.map(([n]) => `<button class="cat c${catN(n)} ${f.cat === n ? "on" : ""}" data-a="setCat" data-v="${n}">${n}</button>`).join("")}</div>
+      <div class="hint">Критический — угроза жизни, аварии, разрушению: остановить и доложить. Значительный — устранить в течение суток. Незначительный — при плановом ТО.</div>
+      <div class="grp">Фото</div><div class="thumbs">${f.photos.map((p, i) => `<span class="th"><img src="${p.url}"><b data-a="delPhoto" data-v="${i}">×</b></span>`).join("")}
+      <label class="addph">📷<input type="file" accept="image/*" capture="environment" id="fPh"></label></div>
+      <label class="chk"><input type="checkbox" id="fFix" ${f.fix ? "checked" : ""}> Устранено на месте</label>
+      <button class="big go" data-a="saveDefect">Сохранить замечание</button>`;
+  };
+  AFTER.defect = () => {
+    const keep = () => { ui.form.node = $("#fNode").value; ui.form.def = $("#fDef").value; ui.form.txt = $("#fTxt").value; ui.form.fix = $("#fFix").checked; };
+    ["#fNode", "#fDef", "#fTxt", "#fFix"].forEach(s => $(s).addEventListener("change", keep));
+    $("#fPh").addEventListener("change", async e => {
+      keep(); const fl = e.target.files[0]; if (!fl) return;
+      try { const b = await shrink(fl); ui.form.photos.push({ blob: b, url: URL.createObjectURL(b) }); } catch (er) { toast(er.message); }
+      render();
+    });
+  };
 
-/* ========= Запуск ========= */
-(async()=>{
-  try{
-    const m = await DB.get("meta","meta");
-    if(m) meta={...meta,...m};
-    if(!meta.device){ meta.device="dev-"+Math.random().toString(36).slice(2,8); await saveMeta(); }
-    await loadAll();
-  }catch(e){ document.getElementById("view").innerHTML=`<div class="panel" style="margin-top:14px">Не удалось открыть память телефона. Откройте приложение не в режиме «инкогнито».</div>`; return; }
-  render(); fromHash();
-  if(!window.EQUIPMENT) toast("Не найден файл equipment.js — загрузите его на GitHub");
-})();
+  V.crit = id => {
+    const d = S.defects.find(x => x.id === id);
+    return `<div class="critbox"><div class="big-ico">⛔</div><h2>ОСТАНОВИТЬ<br>${esc(KT[d.kt].name)}</h2><p>Доложить мастеру смены немедленно.</p><p class="cd">${esc(d.node)}: ${esc(d.desc)}</p></div>
+      <button class="big crit" data-a="critMail" data-v="${id}">✉ Письмо КРИТ на ${esc(S.cfg.email)}</button>
+      ${d.photos.length && navigator.canShare ? `<button class="btn" data-a="critPhoto" data-v="${id}">📷 Отправить фото (Поделиться)</button>` : ""}
+      <button class="big" data-a="critDone">Доложено — продолжить</button>`;
+  };
 
-if("serviceWorker" in navigator){
-  window.addEventListener("load",()=>{
-    navigator.serviceWorker.register("sw.js").then(reg=>{
-      const show=w=>{ window.__waitingSW=w; $("#updBanner").hidden=false; };
-      if(reg.waiting && navigator.serviceWorker.controller) show(reg.waiting);
-      reg.addEventListener("updatefound",()=>{ const w=reg.installing; w.addEventListener("statechange",()=>{ if(w.state==="installed"&&navigator.serviceWorker.controller) show(w); }); });
-      if(navigator.onLine) reg.update().catch(()=>{});
-    }).catch(()=>{});
-    let reloading=false;
-    navigator.serviceWorker.addEventListener("controllerchange",()=>{ if(reloading) return; reloading=true; location.reload(); });
+  /* --- выбор КТ для «Сообщить о дефекте» и «+ Замер» --- */
+  V.pick = p => `<p>${p.why}</p>` + D.ORDER_C.map(c => `<button class="row" data-a="${p.act}" data-v="${c}"><span class="dot ${ktColor(c)}"></span>${esc(ktLabel(c))}</button>`).join("");
+
+  /* --- светофор --- */
+  function ktColor(c) {
+    const od = S.defects.filter(d => d.kt === c && isOpen(d));
+    if (od.some(d => d.cat === "Критический")) return "red";
+    const hot = (D.MEAS[KT[c].type] || []).some(([pl, n]) => { const l = lastMeas(c, pl); return l && l.v > n; });
+    if (od.length || hot) return "yel";
+    if (S.shift && S.rounds.some(r => r.pts[c] && r.pts[c].res !== "skip")) return "grn";
+    return "gry";
+  }
+  V.map = () => {
+    const cnt = { red: 0, yel: 0, grn: 0, gry: 0 }; D.KT.forEach(k => cnt[ktColor(k.code)]++);
+    return `<div class="legend"><span><i class="dot red"></i>Критич. ${cnt.red}</span><span><i class="dot yel"></i>Замечания ${cnt.yel}</span><span><i class="dot grn"></i>В норме ${cnt.grn}</span><span><i class="dot gry"></i>Не осмотрено ${cnt.gry}</span></div>
+      <div class="scheme"><img src="scheme.jpg" alt="Технологическая схема МДСЗ-8">${D.KT.map(k => `<b class="pin ${ktColor(k.code)}" style="left:${k.xy[0]}%;top:${k.xy[1]}%" data-a="openKt" data-v="${k.code}">${k.n}</b>`).join("")}</div>
+      <div class="hint">Нажмите на номер — карточка КТ. «Не осмотрено» — за текущую смену.</div>` +
+      ["red", "yel"].map(col => D.KT.filter(k => ktColor(k.code) === col).map(k => `<button class="row" data-a="openKt" data-v="${k.code}"><span class="dot ${col}"></span>${esc(ktLabel(k.code))}</button>`).join("")).join("");
+  };
+  V.kt = c => {
+    const k = KT[c], ds = S.defects.filter(d => d.kt === c).sort((a, b) => (isOpen(b) - isOpen(a)) || b.date - a.date).slice(0, 15);
+    let h = `<div class="kthead"><small>${c} · ${esc(typeName(c))} · КТ ${k.n}</small><h2>${esc(k.name)}</h2></div>`;
+    const ins = S.rounds.filter(r => r.pts[c]).map(r => `${hm(r.pts[c].t)} ${D.ROUTES[r.rkey].short} — ${short(r.fio)} (${r.pts[c].res === "ok" ? "норма" : r.pts[c].res === "skip" ? "пропуск" : "замечание"})`);
+    h += `<div class="grp">Осмотры в эту смену</div>` + (ins.length ? ins.map(t => `<div>${esc(t)}</div>`).join("") : `<div class="muted">нет</div>`);
+    const M = D.MEAS[k.type];
+    if (M) h += `<div class="grp">Последние замеры</div>` + M.map(([pl, n]) => { const a = S.mhist[c + "|" + pl] || []; return `<div>${esc(pl)}: ${a.length ? a.slice(-4).map(x => `<span class="${x.v > n ? "red" : ""}">${x.v}</span>`).join(" → ") + ` °C <small>(норма ≤ ${n})</small>` : "—"}</div>`; }).join("");
+    h += `<div class="grp">Дефекты</div>` + (ds.length ? ds.map(dcard).join("") : `<div class="muted">нет</div>`);
+    if (S.shift && !isView()) h += `<button class="big warnb" data-a="reportAt" data-v="${c}">⚠ Сообщить о дефекте</button>`;
+    return h;
+  };
+
+  /* --- дефекты --- */
+  function dcard(d) {
+    const over = isOpen(d) && d.due && d.due < ymd(Date.now());
+    return `<div class="dcard c${catN(d.cat)}" data-a="openDef" data-v="${d.id}"><b>${esc(KT[d.kt].name)}</b> · ${esc(d.node)}<div>${esc(d.desc)}</div>
+      <small>${d.id} · ${d.cat} · <b>${d.status}</b>${d.resp ? " · отв. " + esc(short(d.resp)) : ""}${d.due ? ` · <span class="${over ? "red" : ""}">срок ${dmy(ymdToMs(d.due))}</span>` : ""}${d.photos.length ? " · 📷" + d.photos.length : ""}</small></div>`;
+  }
+  V.defects = () => {
+    const f = ui.dfilter || "open";
+    const list = S.defects.filter(d => f === "open" ? isOpen(d) : f === "crit" ? isOpen(d) && d.cat === "Критический" : f === "shift" ? S.shift && d.date >= S.shift.opened : true)
+      .sort((a, b) => catN(a.cat) - catN(b.cat) || a.date - b.date);
+    return `<div class="tabs">${[["open", "Открытые"], ["crit", "Критич."], ["shift", "За смену"], ["all", "Все"]].map(([k, t]) => `<button class="${f === k ? "on" : ""}" data-a="dfilter" data-v="${k}">${t}</button>`).join("")}</div>` +
+      (list.length ? list.map(dcard).join("") : `<p class="muted center">Нет дефектов</p>`);
+  };
+  V.dedit = id => {
+    const d = S.defects.find(x => x.id === id), ro = !canEdit();
+    let h = `<div class="kthead"><small>${d.id} · ${d.kt}</small><h2>${esc(KT[d.kt].name)}</h2></div>
+      <div class="dcard c${catN(d.cat)}"><b>${esc(d.node)}</b><div>${esc(d.desc)}</div><small>${d.cat} · выявил ${esc(short(d.who))} (${d.post}) ${dmyhm(d.date)} · ${esc(d.route)}</small></div>
+      <div class="thumbs" id="dPh"></div>`;
+    if (ro) return h + `<div class="grp">Статус</div><div>${d.status}${d.resp ? ", ответственный " + esc(short(d.resp)) : ""}${d.due ? ", срок " + dmy(ymdToMs(d.due)) : ""}</div>${d.note ? `<div>Примечание: ${esc(d.note)}</div>` : ""}`;
+    const staff = S.cfg.staff.filter(s => s.role !== "Заместитель начальника ПК");
+    const inList = !d.resp || staff.some(s => s.fio === d.resp);
+    h += (d.status === "Открыт" ? `<button class="big go" data-a="takeDef" data-v="${id}">Взять в работу (ответственный — я)</button>` : "") + `
+      <label>Ответственный<select id="eResp"><option value="">— не назначен —</option>${staff.map(s => `<option value="${esc(s.fio)}" ${d.resp === s.fio ? "selected" : ""}>${esc(short(s.fio))} — ${s.role}</option>`).join("")}${inList ? "" : `<option selected>${esc(d.resp)}</option>`}</select></label>
+      <label>Срок устранения<input type="date" id="eDue" value="${d.due || ""}"></label>
+      <label>Статус<select id="eSt">${D.STATUSES.map(s => `<option ${d.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
+      <label>Категория<select id="eCat">${D.CATS.map(([s]) => `<option ${d.cat === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
+      <label>Примечание<textarea id="eNote" rows="2">${esc(d.note || "")}</textarea></label>
+      <div class="hint">При статусе «Устранён» устранившим запишется ${esc(short(me().fio))}, дата — сегодня.</div>
+      <button class="big go" data-a="saveDef" data-v="${id}">Сохранить</button>`;
+    return h;
+  };
+  AFTER.dedit = async id => {
+    const d = S.defects.find(x => x.id === id), box = $("#dPh");
+    for (const n of d.photos) { const b = await IDB.get(n).catch(() => null); if (b && box) box.insertAdjacentHTML("beforeend", `<span class="th"><img src="${URL.createObjectURL(b)}"></span>`); }
+  };
+
+  /* --- смена: план / факт --- */
+  V.shift = () => {
+    if (!S.shift) return `<p class="muted">Смена не открыта.</p>`;
+    const pl = S.cfg.plan[S.shift.kind] || [];
+    let h = shiftBar() + `<table class="tbl"><tr><th>Маршрут</th><th>Кто</th><th>План</th><th>Факт</th></tr>` + pl.map(([rk, rl, n]) => {
+      const f = S.rounds.filter(r => r.end && r.rkey === rk && r.role === rl).length;
+      return `<tr class="${f >= n ? "okr" : "badr"}"><td>${D.ROUTES[rk].label}</td><td>${rl}</td><td>${n}</td><td>${f}</td></tr>`;
+    }).join("") + `</table>`;
+    h += `<div class="grp">Обходы смены</div>` + (S.rounds.length ? S.rounds.map(r => `<div class="rrow ${r.end ? "" : "run"}"><b>${hm(r.start)}${r.end ? "–" + hm(r.end) : " (идёт)"} ${esc(r.route)}</b><small>${esc(short(r.fio))} · ${r.role} · ${r.end ? Math.round((r.end - r.start) / 60000) + " / " + r.norm + " мин" : mins(r.start) + " мин"} · ${done(r)}/${r.list.length} КТ${Object.values(r.pts).filter(p => p.res === "skip").length ? " · пропуск " + Object.values(r.pts).filter(p => p.res === "skip").length : ""}${r.pult ? " · у пульта " + esc(short(r.pult)) : ""}</small></div>`).join("") : `<div class="muted">пока нет</div>`);
+    h += `<div class="grp">Кто у пульта</div>` + (S.shift.pultLog.length ? S.shift.pultLog.map(x => `<div>${hm(x.ts)} — ${esc(short(x.fio))}</div>`).join("") : `<div class="muted">не указано</div>`);
+    if (!isView()) h += `<button class="btn" data-a="pultForm">Сменить у пульта</button>`;
+    return h;
+  };
+
+  /* --- замеры --- */
+  V.meas = () => {
+    let h = role() === "Механик" || role() === "Мастер смены" ? `<button class="big" data-a="measAdd">+ Внести замер</button>` : "";
+    const rows = [];
+    D.KT.forEach(k => (D.MEAS[k.type] || []).forEach(([pl, n]) => { const a = S.mhist[k.code + "|" + pl] || []; if (a.length) rows.push({ k, pl, n, a }); }));
+    rows.sort((x, y) => (y.a[y.a.length - 1].v - y.n) - (x.a[x.a.length - 1].v - x.n));
+    h += rows.length ? `<table class="tbl"><tr><th>КТ / место</th><th>Посл.</th><th>Норма</th><th>Тренд</th></tr>` + rows.map(({ k, pl, n, a }) => { const l = a[a.length - 1]; return `<tr class="${l.v > n ? "badr" : ""}"><td>${k.n}. ${esc(k.name)}<small>${esc(pl)} · ${dmyhm(l.ts)}</small></td><td><b>${l.v}</b></td><td>≤${n}</td><td>${a.slice(-4).map(x => x.v).join("→")}</td></tr>`; }).join("") + `</table>` : `<p class="muted center">Замеров пока нет</p>`;
+    return h;
+  };
+
+  /* --- закрытие смены --- */
+  V.close = () => {
+    if (!S.shift) return `<p class="muted">Смена не открыта.</p><button class="btn" data-a="go" data-v="archive">Архив отправленных отчётов</button>`;
+    const pl = S.cfg.plan[S.shift.kind] || [], run = S.rounds.filter(r => !r.end);
+    const nd = S.defects.filter(d => d.date >= S.shift.opened), crit = nd.filter(d => d.cat === "Критический").length;
+    const miss = pl.filter(([rk, rl, n]) => S.rounds.filter(r => r.end && r.rkey === rk && r.role === rl).length < n);
+    const hot = S.meas.filter(m => m.v > m.n).length;
+    let h = shiftBar() + `<div class="sum"><div><b>${S.rounds.filter(r => r.end).length}</b>обходов</div><div><b>${nd.length}</b>новых дефектов</div><div class="${crit ? "red" : ""}"><b>${crit}</b>КРИТ</div><div><b>${S.meas.length}</b>замеров${hot ? `, вне нормы ${hot}` : ""}</div></div>`;
+    if (run.length) h += `<div class="note warn">Не завершены обходы: ${run.map(r => esc(r.route) + " (" + esc(short(r.fio)) + ")").join(", ")}. Они будут завершены автоматически, неосмотренные КТ — «пропуск: смена закрыта».</div>`;
+    if (miss.length) h += `<div class="note warn">Не выполнен план: ${miss.map(([rk, rl, n]) => `${D.ROUTES[rk].label} (${rl}) — ${S.rounds.filter(r => r.end && r.rkey === rk && r.role === rl).length} из ${n}`).join("; ")}</div>`;
+    h += `<p>Будет сформирован файл <b>${fileName()}</b> (листы «Дефекты», «Обходы», «Замеры») и фото дефектов. Смена закроется, отчёт останется в архиве.</p>
+      <button class="big send" data-a="closeShift">Сформировать отчёт и закрыть смену</button>
+      <button class="btn" data-a="go" data-v="archive">Архив отправленных отчётов</button>`;
+    return h;
+  };
+  const fileName = (sh = S.shift) => `МДСЗ8_${sh.date}_С${sh.no}_${kindShort(sh.kind)}.xlsx`;
+
+  V.send = i => {
+    const a = S.archive[i];
+    return `<div class="note ${a.sent ? "ok" : ""}">${a.sent ? "✓ Отмечено как отправленное " + dmyhm(a.sent) : "Отчёт сформирован. Осталось отправить письмо."}</div>
+      <div class="step"><b>1</b><div>Скачайте файлы на телефон.<small>${esc(a.file)}${a.photos.length ? " и фото: " + a.photos.length + " шт." : ""} Если телефон спросит «Разрешить скачивание нескольких файлов» — разрешите.</small><button class="big" data-a="download" data-v="${i}">⬇ Скачать отчёт${a.photos.length ? " и фото" : ""}</button></div></div>
+      <div class="step"><b>2</b><div>Откройте письмо — адрес, тема и текст подставятся сами.<small>Кому: ${esc(S.cfg.email)}</small><button class="big" data-a="mail" data-v="${i}">✉ Открыть письмо</button></div></div>
+      <div class="step"><b>3</b><div>В письме нажмите 📎 «Прикрепить» → «Загрузки» и выберите файл <b>${esc(a.file)}</b>${a.photos.length ? " и фото" : ""}. Нажмите «Отправить».</div></div>
+      <div class="step"><b>4</b><div><button class="big go" data-a="markSent" data-v="${i}">✓ Письмо отправлено</button></div></div>
+      <details><summary>Если письмо не открылось</summary><p>Скопируйте и вставьте вручную:</p>
+        <button class="btn" data-a="copy" data-v="${esc(S.cfg.email)}">Копировать адрес</button><button class="btn" data-a="copy" data-v="${esc(a.subject)}">Копировать тему</button><button class="btn" data-a="copyBody" data-v="${i}">Копировать текст письма</button></details>
+      <div class="grp">Тема письма</div><div class="mono">${esc(a.subject)}</div><div class="grp">Текст</div><pre class="mono">${esc(a.body)}</pre>`;
+  };
+  V.archive = () => S.archive.length ? S.archive.map((a, i) => ({ a, i })).reverse().map(({ a, i }) => `<button class="row" data-a="go" data-v="send" data-i="${i}">${a.sent ? "✓" : "⏳"} ${esc(a.file)}<small>${a.sent ? "отправлен " + dmyhm(a.sent) : "не отправлен"}</small></button>`).join("") : `<p class="muted center">Отчётов пока нет</p>`;
+
+  /* --- настройки --- */
+  V.settings = () => `<label>Почта для отчётов<input type="email" id="cfgMail" value="${esc(S.cfg.email)}"></label>
+    <div class="grp">Работники (ФИО, должность, ПИН)</div>
+    ${S.cfg.staff.map(s => `<div class="staff" data-id="${s.id}"><input class="sf" value="${esc(s.fio)}" placeholder="Фамилия И.О."><select class="sr">${Object.keys(D.ROLES).map(r => `<option ${s.role === r ? "selected" : ""}>${r}</option>`).join("")}</select><input class="sp" value="${esc(s.pin)}" inputmode="numeric" maxlength="6" placeholder="ПИН"><b data-a="delStaff" data-v="${s.id}">×</b></div>`).join("")}
+    <button class="btn" data-a="addStaff">+ Добавить работника</button>
+    <div class="grp">План обходов на смену</div>
+    ${["Технологическая", "Ремонтная"].map(k => `<div class="muted">${k}</div>` + (S.cfg.plan[k] || []).map(([rk, rl, n], j) => `<div class="planrow">${D.ROUTES[rk].label} · ${rl}<input class="pn" data-k="${k}" data-j="${j}" value="${n}" inputmode="numeric"></div>`).join("")).join("")}
+    <button class="big go" data-a="saveSettings">Сохранить настройки</button>
+    <div class="grp">Демо</div>
+    <button class="btn" data-a="resetAll">Стереть все данные на телефоне</button>
+    <p class="muted">Версия ${APPV}. Почта по умолчанию: ${D.EMAIL}.</p>`;
+
+  /* ---------- действия ---------- */
+  const A = {};
+  document.addEventListener("click", e => {
+    const el = e.target.closest("[data-a]"); if (!el || el.disabled) return;
+    const f = A[el.dataset.a]; if (f) { e.preventDefault(); f(el.dataset.v, el); }
   });
-}
+  A.go = (v, el) => go(v, el.dataset.i != null ? +el.dataset.i : null);
+  A.closeModal = closeModal;
+  A.zoom = src => modal(`<div class="zoom"><img src="${src}"></div><button class="btn" data-a="closeModal">Закрыть</button>`);
+
+  A.pickUser = id => {
+    const s = S.cfg.staff.find(x => x.id === id); let pin = "";
+    const draw = () => modal(`<h3>${esc(short(s.fio))}</h3><div class="pinv">${"●".repeat(pin.length) || "Введите ПИН"}</div><div class="kp">${[1, 2, 3, 4, 5, 6, 7, 8, 9, "⌫", 0, "OK"].map(k => `<button data-a="kp" data-v="${k}">${k}</button>`).join("")}</div>`);
+    A.kp = k => {
+      if (k === "⌫") pin = pin.slice(0, -1); else if (k === "OK") {
+        if (pin === s.pin) { closeModal(); S.session = { id, ts: Date.now() }; save(); if (!S.shift && !D.ROLES[s.role].view) { stack = []; cur = { v: "home" }; go("openShift"); } else home(); return; }
+        pin = ""; toast("Неверный ПИН");
+      } else if (pin.length < 6) pin += k;
+      draw();
+      if (pin === s.pin) A.kp("OK");
+    };
+    draw();
+  };
+  A.logout = () => { S.session = null; save(); home(); };
+  A.openShiftForm = () => go("openShift");
+  A.openShift = () => {
+    const date = $("#shDate").value, no = $("#shNo").value, kind = $("#shKind").value;
+    if (!date) return toast("Укажите дату");
+    const sh = { date, no, kind };
+    if (S.archive.some(a => a.file === fileName(sh))) { if (!confirm(`Отчёт ${fileName(sh)} уже был сформирован. Открыть смену с этими данными ещё раз? Новый файл заменит старый в сводном журнале.`)) return; }
+    S.shift = { ...sh, opened: Date.now(), by: me().fio, cO: 0, cT: 0, pultLog: [] }; S.rounds = []; S.meas = [];
+    save(); toast("Смена открыта"); home();
+  };
+
+  A.homeBtn = b => {
+    if (D.ROUTES[b]) return go("start", { rkey: b });
+    if (b === "report") return go("pick", { act: "reportAt", why: "Выберите оборудование, на котором замечание:" });
+    if (b === "close") return go("close");
+    go(b);
+  };
+
+  A.startRound = rkey => {
+    const R = D.ROUTES[rkey], u = me();
+    let list = R.list ? R.list.slice() : null, label = R.label, norm = R.norm;
+    if (rkey === "P") { const part = (document.querySelector("input[name=part]:checked") || {}).value || "ALL"; if (part !== "ALL") { list = D.P_PARTS[part].slice(); norm = Math.round(R.norm * list.length / D.ORDER_P.length); } }
+    if (!list) { list = [...document.querySelectorAll("input[name=kts]:checked")].map(x => x.value); if (!list.length) return toast("Отметьте хотя бы одну КТ"); norm = list.length * R.normPer; }
+    let pult = "";
+    if (R.pult) {
+      const sel = document.querySelector("input[name=pult]:checked");
+      pult = sel ? (sel.value === "__other" ? $("#pultOther").value.trim() : sel.value) : "";
+      if (!pult) return toast("Укажите, кто остаётся у пульта");
+      const last = S.shift.pultLog[S.shift.pultLog.length - 1];
+      if (!last || last.fio !== pult) S.shift.pultLog.push({ ts: Date.now(), fio: pult, by: u.fio });
+    }
+    const r = { id: `${shiftPrefix()}-O${p2(++S.shift.cO)}`, rkey, route: label, uid: u.id, fio: u.fio, role: u.role, start: Date.now(), end: null, norm, list, pts: {}, pult };
+    S.rounds.push(r); save(); ui.tmp = {};
+    stack = []; cur = { v: "home" }; go("round", r.id);
+  };
+  A.openRound = id => { if (cur.v === "point") { if (stack.length && stack[stack.length - 1].v === "round") stack.pop(); cur = { v: "round", p: id }; render(); window.scrollTo(0, 0); } else go("round", id); };
+  A.openPoint = kt => { const r = activeRoundFromCur(); if (!r) return; go("point", { rid: r.id, kt }); };
+  function activeRoundFromCur() { const id = cur.v === "round" ? cur.p : cur.p && cur.p.rid; return S.rounds.find(r => r.id === id); }
+
+  function collectMeas(rid, kt) {
+    const r = S.rounds.find(x => x.id === rid), out = [];
+    document.querySelectorAll(".meas input").forEach(inp => { const v = num(inp.value); if (v != null) out.push({ pl: inp.dataset.pl, n: +inp.dataset.n, v }); });
+    out.forEach(m => {
+      const ex = S.meas.find(x => x.rid === rid && x.kt === kt && x.pl === m.pl);
+      if (ex) { ex.v = m.v; ex.ts = Date.now(); const h = S.mhist[kt + "|" + m.pl]; if (h && h.length) h[h.length - 1] = { v: m.v, ts: ex.ts }; return; }
+      const rec = { id: `${shiftPrefix()}-T${p2(++S.shift.cT)}`, ts: Date.now(), kt, pl: m.pl, v: m.v, n: m.n, fio: r.fio, rid };
+      S.meas.push(rec); const k = kt + "|" + m.pl; (S.mhist[k] = S.mhist[k] || []).push({ v: m.v, ts: rec.ts }); if (S.mhist[k].length > 20) S.mhist[k].shift();
+    });
+    return out;
+  }
+  A.pointOk = () => {
+    const { rid, kt } = cur.p, r = S.rounds.find(x => x.id === rid);
+    const inputs = [...document.querySelectorAll(".meas input")];
+    if (inputs.some(i => num(i.value) == null) && !ui.okNoMeas) {
+      ui.okNoMeas = true; return toast("Не все замеры введены. Нажмите «Всё в норме» ещё раз, чтобы продолжить без них.");
+    }
+    ui.okNoMeas = false;
+    const hi = inputs.filter(i => num(i.value) != null && num(i.value) > +i.dataset.n);
+    if (hi.length && !ui.okHot) { ui.okHot = true; return toast("Есть температура выше нормы — оформите замечание или нажмите «Всё в норме» ещё раз."); }
+    ui.okHot = false;
+    collectMeas(rid, kt);
+    r.pts[kt] = { t: Date.now(), res: "ok" }; save(); nextPoint(r, kt);
+  };
+  function nextPoint(r, kt) {
+    const nx = r.list.find(c => !r.pts[c]);
+    delete ui.tmp[kt];
+    if (nx) { cur = { v: "point", p: { rid: r.id, kt: nx } }; render(); window.scrollTo(0, 0); }
+    else { cur = { v: "round", p: r.id }; render(); toast("Все точки пройдены — завершите обход"); }
+  }
+  A.pointNext = () => { const { rid, kt } = cur.p; nextPoint(S.rounds.find(x => x.id === rid), kt); };
+  A.pointSkip = () => modal(`<h3>Причина пропуска</h3>${D.SKIP.map(s => `<button class="row" data-a="doSkip" data-v="${s}">${s}</button>`).join("")}<input id="skipOther" placeholder="или впишите свою причину"><button class="btn" data-a="doSkip" data-v="__other">Пропустить</button>`);
+  A.doSkip = v => {
+    const reason = v === "__other" || v === "Другое" ? ($("#skipOther").value.trim()) : v;
+    if (!reason) return toast("Впишите причину");
+    const { rid, kt } = cur.p, r = S.rounds.find(x => x.id === rid);
+    closeModal(); r.pts[kt] = { t: Date.now(), res: "skip", reason }; save(); nextPoint(r, kt);
+  };
+  A.pointDefect = (v, el, pre) => {
+    const { rid, kt } = cur.p, r = S.rounds.find(x => x.id === rid);
+    collectMeas(rid, kt); save();
+    ui.form = { node: "", def: "", txt: "", cat: "", fix: false, photos: [], ...(pre || {}) };
+    go("defect", { kt, rid, route: r.route });
+  };
+  A.hotDefect = pl => {
+    closeModal();
+    const inp = [...document.querySelectorAll(".meas input")].find(i => i.dataset.pl === pl), kt = cur.p.kt, t = KT[kt].type;
+    const hk = D.HOT[t + ":" + pl] || D.HOT[t] || ["Прочее", "Другое (описать)"];
+    A.pointDefect(null, null, { node: hk[0], def: hk[1], txt: `${pl}: t = ${num(inp.value)} °C при норме ≤ ${inp.dataset.n} °C`, cat: "Значительный" });
+  };
+  A.reportAt = kt => {
+    if (!S.shift) return toast("Смена не открыта");
+    ui.form = { node: "", def: "", txt: "", cat: "", fix: false, photos: [] };
+    go("defect", { kt, rid: null, route: D.ROUTES.V.label });
+  };
+  A.setCat = c => { ui.form.cat = c; document.querySelectorAll(".cat").forEach(b => b.classList.toggle("on", b.dataset.v === c)); };
+  A.delPhoto = i => { ui.form.photos.splice(+i, 1); render(); };
+  A.saveDefect = async () => {
+    const f = ui.form, c = cur.p, u = me();
+    f.node = $("#fNode").value; f.def = $("#fDef").value; f.txt = $("#fTxt").value.trim(); f.fix = $("#fFix").checked;
+    if (!f.node) return toast("Выберите узел");
+    if (!f.def) return toast("Выберите типовой дефект");
+    if (/Другое/.test(f.def) && !f.txt) return toast("Опишите дефект в поле «Уточнение»");
+    if (!f.cat) return toast("Выберите категорию");
+    const now = Date.now(), num3 = p3(++S.cD), id = `${shiftPrefix()}-D${num3}`;
+    const d0 = new Date(now), stamp = `${ymd(now).replace(/-/g, "")}_${p2(d0.getHours())}${p2(d0.getMinutes())}`;
+    const photos = [];
+    for (let i = 0; i < f.photos.length; i++) { const n = `${c.kt}_${stamp}_D${num3}${i ? "_" + (i + 1) : ""}.jpg`; await IDB.put(n, f.photos[i].blob); photos.push(n); }
+    const cat = D.CATS.find(x => x[0] === f.cat);
+    const d = { id, date: now, shiftNo: S.shift.no, kind: S.shift.kind, route: c.route, kt: c.kt, node: f.node, desc: f.def + (f.txt ? ": " + f.txt : ""), cat: f.cat, photos,
+      who: u.fio, post: u.role, resp: f.fix ? u.fio : "", due: addDays(now, cat[1]), status: f.fix ? "Устранён" : "Открыт", fixed: f.fix ? now : null, fixer: f.fix ? u.fio : "", note: f.fix ? "Устранено на месте" : "", changed: now, rid: c.rid };
+    S.defects.push(d);
+    if (c.rid) { const r = S.rounds.find(x => x.id === c.rid); const p = r.pts[c.kt] && r.pts[c.kt].res === "def" ? r.pts[c.kt] : (r.pts[c.kt] = { t: now, res: "def", defs: [] }); p.defs.push(id); }
+    save(); f.photos.forEach(p => URL.revokeObjectURL(p.url)); ui.form = null;
+    if (d.cat === "Критический" && !f.fix) { cur = { v: "crit", p: id }; render(); window.scrollTo(0, 0); return; }
+    toast("Замечание сохранено: " + id);
+    afterDefect(c);
+  };
+  function afterDefect(c) { if (c.rid) { stack.pop(); cur = { v: "point", p: { rid: c.rid, kt: c.kt } }; render(); window.scrollTo(0, 0); } else home(); }
+  A.critMail = id => {
+    const d = S.defects.find(x => x.id === id);
+    const subj = `[МДСЗ-8][КРИТ][${KT[d.kt].name}][${dmyhm(d.date)}]`;
+    const body = [`КРИТИЧЕСКИЙ ДЕФЕКТ — МДСЗ-8, ПК «Гаврилово»`, `Оборудование: ${KT[d.kt].name} (${d.kt})`, `Узел: ${d.node}`, `Дефект: ${d.desc}`, `Выявил: ${short(d.who)}, ${d.post}`, `Время: ${dmyhm(d.date)}, смена ${d.shiftNo} (${d.kind})`, `ID: ${d.id}`, d.photos.length ? `Фото: ${d.photos.join(", ")}` : "", ``, `Оборудование остановлено, мастер смены извещён.`].filter(x => x !== "").join("\r\n");
+    location.href = `mailto:${S.cfg.email}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body)}`;
+  };
+  A.critPhoto = async id => {
+    const d = S.defects.find(x => x.id === id), files = [];
+    for (const n of d.photos) { const b = await IDB.get(n); if (b) files.push(new File([b], n, { type: "image/jpeg" })); }
+    try { await navigator.share({ files, title: `КРИТ ${KT[d.kt].name}`, text: `${d.id}: ${d.desc}` }); } catch (e) { }
+  };
+  A.critDone = () => { const d = S.defects.find(x => x.id === cur.p); afterDefect({ rid: d.rid, kt: d.kt }); };
+
+  A.finishRound = id => {
+    const r = S.rounds.find(x => x.id === id), left = r.list.filter(c => !r.pts[c]);
+    if (left.length) return modal(`<h3>Не осмотрено КТ: ${left.length}</h3><p>Завершить обход можно только с причиной пропуска.</p>${D.SKIP.map(s => `<button class="row" data-a="finishSkip" data-v="${s}">${s}</button>`).join("")}<input id="skipOther" placeholder="или впишите свою причину"><button class="btn" data-a="finishSkip" data-v="__other">Завершить</button><button class="btn" data-a="closeModal">Вернуться к обходу</button>`);
+    endRound(r);
+  };
+  A.finishSkip = v => {
+    const reason = v === "__other" || v === "Другое" ? $("#skipOther").value.trim() : v; if (!reason) return toast("Впишите причину");
+    const r = activeRoundFromCur(); closeModal();
+    r.list.forEach(c => { if (!r.pts[c]) r.pts[c] = { t: Date.now(), res: "skip", reason }; }); endRound(r);
+  };
+  function endRound(r) {
+    r.end = Date.now(); save();
+    const m = Math.round((r.end - r.start) / 60000), nd = S.defects.filter(d => d.rid === r.id).length;
+    home(); toast(`Обход завершён: ${m} мин (норматив ${r.norm}), замечаний ${nd}`);
+  }
+
+  A.openKt = c => go("kt", c);
+  A.openDef = id => go("dedit", id);
+  A.dfilter = f => { ui.dfilter = f; render(); };
+  A.takeDef = id => { const d = S.defects.find(x => x.id === id); d.status = "В работе"; d.resp = me().fio; d.changed = Date.now(); save(); toast("Взято в работу"); back(); };
+  A.saveDef = id => {
+    const d = S.defects.find(x => x.id === id), st = $("#eSt").value;
+    d.resp = $("#eResp").value; d.due = $("#eDue").value; d.cat = $("#eCat").value; d.note = $("#eNote").value.trim();
+    if (st === "Устранён" && d.status !== "Устранён") { d.fixed = Date.now(); d.fixer = me().fio; }
+    if (st !== "Устранён") { d.fixed = null; d.fixer = ""; }
+    d.status = st; d.changed = Date.now(); save(); toast("Сохранено"); back();
+  };
+  A.pultForm = () => {
+    const cand = S.cfg.staff.filter(s => ["Дробильщик", "Мастер смены", "Электрослесарь"].includes(s.role));
+    modal(`<h3>Кто сейчас у пульта?</h3>${cand.map(s => `<button class="row" data-a="setPult" data-v="${esc(s.fio)}">${esc(short(s.fio))} <small>${s.role}</small></button>`).join("")}`);
+  };
+  A.setPult = fio => { S.shift.pultLog.push({ ts: Date.now(), fio, by: me().fio }); save(); closeModal(); render(); };
+  A.measAdd = () => go("pick", { act: "measAt", why: "Где выполнен замер?" });
+  A.measAt = kt => {
+    const M = D.MEAS[KT[kt].type]; if (!M) return toast("Для этой КТ замеры не предусмотрены");
+    modal(`<h3>${esc(KT[kt].name)}</h3>${M.map(([pl, n], i) => `<label>${esc(pl)} <small>≤ ${n} °C</small><input inputmode="decimal" class="ma" data-pl="${esc(pl)}" data-n="${n}"></label>`).join("")}<button class="big go" data-a="measSave" data-v="${kt}">Сохранить</button>`);
+  };
+  A.measSave = kt => {
+    if (!S.shift) return toast("Смена не открыта");
+    document.querySelectorAll(".ma").forEach(inp => {
+      const v = num(inp.value); if (v == null) return;
+      const rec = { id: `${shiftPrefix()}-T${p2(++S.shift.cT)}`, ts: Date.now(), kt, pl: inp.dataset.pl, v, n: +inp.dataset.n, fio: me().fio, rid: null };
+      S.meas.push(rec); const k = kt + "|" + rec.pl; (S.mhist[k] = S.mhist[k] || []).push({ v, ts: rec.ts });
+      if (v > rec.n) toast(`${rec.pl}: ${v} °C выше нормы — заведите замечание через «Сообщить о дефекте»`);
+    });
+    save(); closeModal(); stack.pop(); cur = { v: "meas" }; render();
+  };
+
+  /* --- отчёт смены --- */
+  const DT = (ms, f) => ms ? { d: ms, f } : "";
+  A.closeShift = () => {
+    if (!confirm("Сформировать отчёт и закрыть смену? После этого записи смены изменить будет нельзя.")) return;
+    const sh = S.shift, u = me(), now = Date.now(), shMs = ymdToMs(sh.date);
+    S.rounds.filter(r => !r.end).forEach(r => { r.list.forEach(c => { if (!r.pts[c]) r.pts[c] = { t: now, res: "skip", reason: "Смена закрыта" }; }); r.end = now; });
+    const defs = S.defects.filter(d => isOpen(d) || d.changed >= sh.opened || d.date >= sh.opened);
+    const DEF = [["ID дефекта", "Дата выявления", "Смена", "Вид смены", "Маршрут", "Код КТ", "Оборудование", "Тип оборудования", "Узел", "Описание дефекта", "Категория", "Фото", "Выявил", "Должность", "Ответственный", "Срок устранения", "Статус", "Дата устранения", "Устранил", "Примечание", "Дата изменения"]]
+      .concat(defs.map(d => [d.id, DT(d.date, "d"), d.shiftNo, d.kind, d.route, d.kt, KT[d.kt].name, typeName(d.kt), d.node, d.desc, d.cat, d.photos.join("; "), d.who, d.post, d.resp, d.due ? DT(ymdToMs(d.due), "d") : "", d.status, DT(d.fixed, "d"), d.fixer, d.note, DT(d.changed, "dt")]));
+    const OBH = [["ID обхода", "Дата", "Смена", "Вид смены", "Маршрут", "ФИО", "Роль", "Начало", "Окончание", "Минут", "Норматив, мин", "Точек план", "Точек факт", "Пропущено", "У пульта"]]
+      .concat(S.rounds.map(r => { const sk = Object.values(r.pts).filter(p => p.res === "skip").length; return [r.id, DT(shMs, "d"), sh.no, sh.kind, r.route, r.fio, r.role, DT(r.start, "dt"), DT(r.end, "dt"), Math.round((r.end - r.start) / 60000), r.norm, r.list.length, r.list.length - sk, sk, r.pult]; }));
+    const ZAM = [["ID замера", "Дата и время", "Код КТ", "Оборудование", "Место замера", "t, °C", "Норма, °C", "Вне нормы", "ФИО"]]
+      .concat(S.meas.map(m => [m.id, DT(m.ts, "dt"), m.kt, KT[m.kt].name, m.pl, m.v, m.n, m.v > m.n ? "Да" : "Нет", m.fio]));
+    const PTS = [["ID обхода", "Маршрут", "ФИО", "№", "Код КТ", "Оборудование", "Время", "Результат", "Причина пропуска", "ID дефектов"]];
+    S.rounds.forEach(r => r.list.forEach((c, i) => { const p = r.pts[c] || {}; PTS.push([r.id, r.route, r.fio, i + 1, c, KT[c].name, DT(p.t, "dt"), p.res === "ok" ? "Норма" : p.res === "def" ? "Замечание" : "Пропуск", p.reason || "", (p.defs || []).join("; ")]); }));
+    const sheets = [
+      { name: "Дефекты", cols: [22, 12, 7, 15, 16, 11, 30, 18, 24, 34, 14, 30, 20, 16, 20, 12, 14, 12, 20, 26, 16], rows: DEF },
+      { name: "Обходы", cols: [22, 12, 7, 15, 16, 20, 16, 16, 16, 8, 10, 9, 9, 10, 20], rows: OBH },
+      { name: "Замеры", cols: [22, 16, 11, 30, 26, 8, 9, 9, 20], rows: ZAM },
+      { name: "Точки обхода", cols: [22, 16, 20, 5, 11, 30, 16, 11, 26, 24], rows: PTS },
+    ];
+    const nd = S.defects.filter(d => d.date >= sh.opened), crit = nd.filter(d => d.cat === "Критический").length;
+    const openAll = S.defects.filter(isOpen), openCrit = openAll.filter(d => d.cat === "Критический").length;
+    const subject = `[МДСЗ-8][${dmy(shMs)}][Смена ${sh.no} · ${kindShort(sh.kind)}][Деф: ${nd.length} · КРИТ: ${crit}]`;
+    const pl = S.cfg.plan[sh.kind] || [];
+    const photos = [...new Set(defs.filter(d => d.date >= sh.opened || d.changed >= sh.opened).flatMap(d => d.photos))];
+    const body = [`МДСЗ-8, ПК «Гаврилово» — отчёт смены`, `Дата: ${dmy(shMs)}, смена ${sh.no} (${sh.kind})`, `Закрыл: ${short(u.fio)}, ${u.role}, ${dmyhm(now)}`, ``,
+      `Обходы (факт / план):`, ...pl.map(([rk, rl, n]) => `  ${D.ROUTES[rk].label} (${rl}): ${S.rounds.filter(r => r.rkey === rk && r.role === rl).length} / ${n}`),
+      `  всего обходов: ${S.rounds.length}, пропущено КТ: ${S.rounds.reduce((s, r) => s + Object.values(r.pts).filter(p => p.res === "skip").length, 0)}`, ``,
+      `Новых дефектов: ${nd.length}, из них критических: ${crit}`, `Открытых дефектов всего: ${openAll.length} (критических: ${openCrit})`,
+      `Замеров: ${S.meas.length}, вне нормы: ${S.meas.filter(m => m.v > m.n).length}`,
+      ...(nd.length ? [``, `Новые дефекты:`, ...nd.slice(0, 15).map(d => `  • ${KT[d.kt].name}: ${d.desc} — ${d.cat}, ${d.status}`)] : []),
+      ``, `Вложения: ${fileName(sh)}${photos.length ? ` + фото ${photos.length} шт.` : ""}`, `Сохраните вложения в папку «МДСЗ-8 Отчёты» и обновите Сводный журнал.`].join("\r\n");
+    S.archive.push({ file: fileName(sh), subject, body, sheets, photos, created: now, sent: null, by: u.fio });
+    if (S.archive.length > 40) S.archive.shift();
+    S.shift = null; S.rounds = []; S.meas = [];
+    save(); stack = []; cur = { v: "home" }; go("send", S.archive.length - 1);
+  };
+  function dl(blob, name) { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000); }
+  A.download = async i => {
+    const a = S.archive[+i];
+    dl(XLSXLite.build(a.sheets), a.file);
+    let miss = 0;
+    for (const n of a.photos) { await new Promise(r => setTimeout(r, 700)); const b = await IDB.get(n).catch(() => null); if (b) dl(b, n); else miss++; }
+    toast(`Скачано: ${a.file}${a.photos.length ? ` и фото ${a.photos.length - miss}` : ""}. Файлы — в папке «Загрузки».`);
+  };
+  A.mail = i => { const a = S.archive[+i]; location.href = `mailto:${S.cfg.email}?subject=${encodeURIComponent(a.subject)}&body=${encodeURIComponent(a.body)}`; };
+  A.markSent = i => { S.archive[+i].sent = Date.now(); save(); toast("Отчёт отмечен как отправленный"); A.logout(); };
+  A.copy = async v => { try { await navigator.clipboard.writeText(v); toast("Скопировано"); } catch (e) { prompt("Скопируйте:", v); } };
+  A.copyBody = i => A.copy(S.archive[+i].body);
+
+  A.addStaff = () => { readStaff(); S.cfg.staff.push({ id: "u" + Date.now(), fio: "", role: "Дробильщик", pin: "" }); render(); };
+  A.delStaff = id => { readStaff(); if (S.session && id === S.session.id) return toast("Нельзя удалить себя"); S.cfg.staff = S.cfg.staff.filter(s => s.id !== id); render(); };
+  function readStaff() {
+    document.querySelectorAll(".staff").forEach(r => { const s = S.cfg.staff.find(x => x.id === r.dataset.id); if (s) { s.fio = r.querySelector(".sf").value.trim(); s.role = r.querySelector(".sr").value; s.pin = r.querySelector(".sp").value.trim(); } });
+  }
+  A.saveSettings = () => {
+    readStaff();
+    const bad = S.cfg.staff.find(s => !s.fio || !/^\d{4,6}$/.test(s.pin)); if (bad) return toast("У каждого работника нужны ФИО и ПИН из 4–6 цифр");
+    const em = $("#cfgMail").value.trim(); if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return toast("Проверьте адрес почты");
+    S.cfg.email = em;
+    document.querySelectorAll(".pn").forEach(i => { const v = parseInt(i.value, 10); if (v >= 0) S.cfg.plan[i.dataset.k][+i.dataset.j][2] = v; });
+    save(); toast("Настройки сохранены"); back();
+  };
+  A.resetAll = () => { if (!confirm("Стереть все обходы, дефекты, отчёты и настройки на этом телефоне?")) return; localStorage.removeItem(KEY); indexedDB.deleteDatabase("mdsz8"); S = fresh(); home(); };
+
+  $("#hdrBack").addEventListener("click", () => { closeModal(); if (cur.v === "point") return A.openRound(cur.p.rid); back(); });
+  $("#hdrOut").addEventListener("click", () => { if (confirm("Выйти? Начатый обход сохранится.")) A.logout(); });
+  window.MDSZ8 = { state: () => S, A };
+  render();
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js").then(reg => {
+      reg.addEventListener("updatefound", () => { const w = reg.installing; w.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) { const b = $("#upd"); b.hidden = false; b.onclick = () => { w.postMessage("skipWaiting"); }; } }); });
+    }).catch(() => { });
+    let rl = false; navigator.serviceWorker.addEventListener("controllerchange", () => { if (!rl) { rl = true; location.reload(); } });
+  }
+})();
