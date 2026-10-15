@@ -1,7 +1,7 @@
 /* МДСЗ-8 · электронные обходы. Офлайн-PWA, данные хранятся на телефоне смены. */
 (function () {
   "use strict";
-  const D = window.D8, KEY = "mdsz8-v1", APPV = "демо 1.2";
+  const D = window.D8, KEY = "mdsz8-v1", APPV = "демо 1.4";
   const DEF = { routes: JSON.parse(JSON.stringify(D.ROUTES)), meas: JSON.parse(JSON.stringify(D.MEAS)) };
   const ADMIN_ROLE = "Администратор", ADMIN_BTN = ["settings", "map", "shift", "defects", "meas", "archive"];
   const KT = Object.fromEntries(D.KT.map(k => [k.code, k]));
@@ -145,7 +145,7 @@
       return `<button class="tile ${isRoute ? "route" : ""} ${b === "report" ? "warn" : ""} ${b === "close" ? "send" : ""}" data-a="homeBtn" data-v="${b}"${dis}><b>${L[b][0]}</b><small>${esc(L[b][1])}${pf}</small></button>`;
     }).join("") + `</div>`;
     if (!S.shift && !isView()) h += `<button class="big" data-a="openShiftForm">Открыть смену</button>`;
-    h += `<button class="btn" data-a="myPin">🔑 Сменить свой ПИН</button>`;
+    h += `<button class="big scanb" data-a="scan">📷 Сканировать QR-метку</button><button class="btn" data-a="myPin">🔑 Сменить свой ПИН</button>`;
     return h;
   };
   function shiftBar() {
@@ -207,10 +207,11 @@
     let h = `<div class="rhead"><b>${esc(r.route)}</b><span class="${el > r.norm ? "red" : ""}">${el} / ${r.norm} мин</span><div class="bar"><i style="width:${Math.round(100 * Object.keys(r.pts).length / r.list.length)}%"></i></div><small>Осмотрено ${done(r)} · пропущено ${nSkip} · всего ${r.list.length}${r.pult ? " · у пульта " + esc(short(r.pult)) : ""}</small></div>`;
     const next = r.list.find(c => !r.pts[c]);
     if (next) h += `<button class="big go" data-a="openPoint" data-v="${next}">Следующая: ${esc(ktLabel(next))} →</button>`;
+    h += `<button class="big scanb" data-a="scan">📷 Сканировать QR-метку</button>`;
     h += `<ol class="pts">` + r.list.map((c, i) => {
       const p = r.pts[c]; const st = !p ? "" : p.res === "ok" ? "ok" : p.res === "skip" ? "skip" : "def";
       const ico = !p ? "○" : p.res === "ok" ? "✓" : p.res === "skip" ? "—" : "✎";
-      return `<li class="${st}" data-a="openPoint" data-v="${c}"><span class="ico">${ico}</span><span><b>${i + 1}. ${esc(KT[c].name)}</b><small>${c}${p ? " · " + hm(p.t) + (p.reason ? " · " + esc(p.reason) : "") : ""}</small></span></li>`;
+      return `<li class="${st}" data-a="openPoint" data-v="${c}"><span class="ico">${ico}</span><span><b>${i + 1}. ${esc(KT[c].name)}</b><small>${c}${(r.qr || {})[c] ? " · 📷 метка" : ""}${p ? " · " + hm(p.t) + (p.reason ? " · " + esc(p.reason) : "") : ""}</small></span></li>`;
     }).join("") + `</ol>`;
     if (D.ROUTES[r.rkey].map) h += `<button class="btn" data-a="zoom" data-v="${D.ROUTES[r.rkey].map}">🗺 Карта маршрута</button>`;
     h += `<button class="big ${next ? "" : "go"}" data-a="finishRound" data-v="${r.id}">■ Завершить обход</button>`;
@@ -236,6 +237,8 @@
     if (p && p.defs && p.defs.length) h += `<div class="grp">Замечания в этой точке</div>` + p.defs.map(id => { const d = S.defects.find(x => x.id === id); return d ? `<div class="dcard c${catN(d.cat)}"><b>${esc(d.node)}</b> — ${esc(d.desc)}<small>${d.cat} · ${d.status}${d.photos.length ? " · 📷" + d.photos.length : ""}</small></div>` : ""; }).join("");
     if (p && p.res === "skip") h += `<div class="note">Пропущено: ${esc(p.reason)}</div>`;
     if (p && p.res === "ok") h += `<div class="note ok">✓ Отмечено в норме в ${hm(p.t)}</div>`;
+    const qrT = (r.qr || {})[kt];
+    h += qrT ? `<div class="note ok">📷 Метка отсканирована в ${hm(qrT)}</div>` : `<button class="${S.cfg.requireQR ? "big scanb" : "btn"}" data-a="scan">📷 Отсканировать метку${S.cfg.requireQR ? " (обязательно)" : ""}</button>`;
     h += `<div class="pbtns">`;
     if (!p || p.res === "skip") h += `<button class="big go" data-a="pointOk">✓ Всё в норме</button>`;
     h += `<button class="big warnb" data-a="pointDefect">✎ Есть замечание</button>`;
@@ -439,6 +442,7 @@
     ${rn.map(([k, t, v]) => `<div class="planrow">${t}<input class="rn" data-k="${k}" value="${v}" inputmode="numeric"></div>`).join("")}
     <div class="grp">Нормы температур (пирометр), °C не более</div>
     ${Object.keys(D.MEAS).map(t => D.MEAS[t].map(([pl, n]) => `<div class="planrow">${esc(D.TYPES[t][0])}: ${esc(pl)}<input class="tn" data-k="${t}|${esc(pl)}" value="${n}" inputmode="numeric"></div>`).join("")).join("")}
+    <div class="grp">QR-метки</div><label class="chk"><input type="checkbox" id="cfgQR" ${S.cfg.requireQR ? "checked" : ""}> Отмечать точку обхода только после сканирования QR-метки</label>
     <div class="grp">Автовыход</div><div class="planrow">Выходить из учётной записи через, часов<input id="cfgSess" value="${S.cfg.sessionH || 13}" inputmode="numeric"></div>
     <button class="big go" data-a="saveSettings">Сохранить настройки</button>
     <div class="grp">Перенос настроек на другой телефон</div>
@@ -477,7 +481,7 @@
     const s = id === "admin" ? { id: "admin", fio: "Администратор", role: ADMIN_ROLE, ph: S.cfg.admin.ph } : S.cfg.staff.find(x => x.id === id); let pin = "", busy = false;
     const lockLeft = () => Math.ceil(((S.lock || {})[id] || 0) - Date.now()) / 1000;
     const draw = (msg) => modal(`<h3>${esc(short(s.fio))}</h3><div class="pinv">${"●".repeat(pin.length) || (msg || "Введите ПИН")}</div><div class="kp">${[1, 2, 3, 4, 5, 6, 7, 8, 9, "⌫", 0, "OK"].map(k => `<button data-a="kp" data-v="${k}">${k}</button>`).join("")}</div>`);
-    const enter = () => { closeModal(); (S.fails || {})[id] = 0; S.session = { id, ts: Date.now() }; save(); if (!S.shift && D.ROLES[s.role] && !D.ROLES[s.role].view) { stack = []; cur = { v: "home" }; go("openShift"); } else home(); };
+    const enter = () => { closeModal(); (S.fails || {})[id] = 0; S.session = { id, ts: Date.now() }; save(); if (!S.shift && D.ROLES[s.role] && !D.ROLES[s.role].view) { stack = []; cur = { v: "home" }; go("openShift"); } else { home(); if (ui.pendingKt) { const k = ui.pendingKt; ui.pendingKt = null; handleKt(k); } } };
     A.kp = async k => {
       if (busy) return;
       if (lockLeft() > 0) { pin = ""; return draw(`Вход заблокирован на ${Math.ceil(lockLeft())} с`); }
@@ -544,8 +548,10 @@
     });
     return out;
   }
+  const needQR = (r, kt) => { if (S.cfg.requireQR && !(r.qr || {})[kt]) { toast("Сначала отсканируйте QR-метку на оборудовании"); return true; } return false; };
   A.pointOk = () => {
     const { rid, kt } = cur.p, r = S.rounds.find(x => x.id === rid);
+    if (needQR(r, kt)) return;
     const inputs = [...document.querySelectorAll(".meas input")];
     if (inputs.some(i => num(i.value) == null) && !ui.okNoMeas) {
       ui.okNoMeas = true; return toast("Не все замеры введены. Нажмите «Всё в норме» ещё раз, чтобы продолжить без них.");
@@ -573,6 +579,7 @@
   };
   A.pointDefect = (v, el, pre) => {
     const { rid, kt } = cur.p, r = S.rounds.find(x => x.id === rid);
+    if (needQR(r, kt)) return;
     collectMeas(rid, kt); save();
     ui.form = { node: "", def: "", txt: "", cat: "", fix: false, photos: [], ...(pre || {}) };
     go("defect", { kt, rid, route: r.route });
@@ -686,13 +693,13 @@
       .concat(S.rounds.map(r => { const sk = Object.values(r.pts).filter(p => p.res === "skip").length; return [r.id, DT(shMs, "d"), sh.no, sh.kind, r.route, r.fio, r.role, DT(r.start, "dt"), DT(r.end, "dt"), Math.round((r.end - r.start) / 60000), r.norm, r.list.length, r.list.length - sk, sk, r.pult]; }));
     const ZAM = [["ID замера", "Дата и время", "Код КТ", "Оборудование", "Место замера", "t, °C", "Норма, °C", "Вне нормы", "ФИО"]]
       .concat(S.meas.map(m => [m.id, DT(m.ts, "dt"), m.kt, KT[m.kt].name, m.pl, m.v, m.n, m.v > m.n ? "Да" : "Нет", m.fio]));
-    const PTS = [["ID обхода", "Маршрут", "ФИО", "№", "Код КТ", "Оборудование", "Время", "Результат", "Причина пропуска", "ID дефектов"]];
-    S.rounds.forEach(r => r.list.forEach((c, i) => { const p = r.pts[c] || {}; PTS.push([r.id, r.route, r.fio, i + 1, c, KT[c].name, DT(p.t, "dt"), p.res === "ok" ? "Норма" : p.res === "def" ? "Замечание" : "Пропуск", p.reason || "", (p.defs || []).join("; ")]); }));
+    const PTS = [["ID обхода", "Маршрут", "ФИО", "№", "Код КТ", "Оборудование", "Время", "Результат", "Причина пропуска", "ID дефектов", "Метка QR"]];
+    S.rounds.forEach(r => r.list.forEach((c, i) => { const p = r.pts[c] || {}; PTS.push([r.id, r.route, r.fio, i + 1, c, KT[c].name, DT(p.t, "dt"), p.res === "ok" ? "Норма" : p.res === "def" ? "Замечание" : "Пропуск", p.reason || "", (p.defs || []).join("; "), (r.qr || {})[c] ? "Да" : "Нет"]); }));
     const sheets = [
       { name: "Дефекты", cols: [22, 12, 7, 15, 16, 11, 30, 18, 24, 34, 14, 30, 20, 16, 20, 12, 14, 12, 20, 26, 16], rows: DEF },
       { name: "Обходы", cols: [22, 12, 7, 15, 16, 20, 16, 16, 16, 8, 10, 9, 9, 10, 20], rows: OBH },
       { name: "Замеры", cols: [22, 16, 11, 30, 26, 8, 9, 9, 20], rows: ZAM },
-      { name: "Точки обхода", cols: [22, 16, 20, 5, 11, 30, 16, 11, 26, 24], rows: PTS },
+      { name: "Точки обхода", cols: [22, 16, 20, 5, 11, 30, 16, 11, 26, 24, 10], rows: PTS },
     ];
     const nd = S.defects.filter(d => d.date >= sh.opened), crit = nd.filter(d => d.cat === "Критический").length;
     const openAll = S.defects.filter(isOpen), openCrit = openAll.filter(d => d.cat === "Критический").length;
@@ -780,6 +787,7 @@
     document.querySelectorAll(".pn").forEach(i => { const v = parseInt(i.value, 10); if (v >= 0) S.cfg.plan[i.dataset.k][+i.dataset.j][2] = v; });
     document.querySelectorAll(".rn").forEach(i => { const v = parseInt(i.value, 10); if (v > 0) S.cfg.norms[i.dataset.k] = v; });
     document.querySelectorAll(".tn").forEach(i => { const v = parseFloat(i.value.replace(",", ".")); if (v > 0) S.cfg.tnorm[i.dataset.k] = v; });
+    S.cfg.requireQR = $("#cfgQR").checked;
     const h = parseInt($("#cfgSess").value, 10); if (h >= 1 && h <= 24) S.cfg.sessionH = h;
     applyCfg(); save(); toast("Настройки сохранены"); back();
   };
@@ -792,8 +800,49 @@
 
   $("#hdrBack").addEventListener("click", () => { closeModal(); if (cur.v === "point") return A.openRound(cur.p.rid); back(); });
   $("#hdrOut").addEventListener("click", () => { if (confirm("Выйти? Начатый обход сохранится.")) A.logout(); });
-  window.MDSZ8 = { state: () => S, A };
-  migrate().then(render, render);
+  /* ---------- QR-сканер (офлайн, jsQR) ---------- */
+  let scanStream = null, scanTimer = null;
+  function parseKt(text) { const m = String(text).match(/kt=([A-Za-z0-9-]+)/i); const c = (m ? m[1] : String(text).trim()).toUpperCase(); return KT[c] ? c : null; }
+  function handleKt(code) {
+    if (!S.session) { ui.pendingKt = code; toast(`Метка: ${KT[code].name}. Войдите в приложение.`); return; }
+    const ar = activeRound();
+    if (ar && ar.list.includes(code)) {
+      ar.qr = ar.qr || {}; ar.qr[code] = Date.now(); save();
+      stack = [{ v: "home" }, { v: "round", p: ar.id }]; cur = { v: "point", p: { rid: ar.id, kt: code } }; render(); window.scrollTo(0, 0);
+      toast(`📷 Метка подтверждена: ${KT[code].name}`);
+    } else {
+      if (ar) toast(`«${KT[code].name}» нет в текущем маршруте`);
+      go("kt", code);
+    }
+  }
+  A.scan = async () => {
+    let ov = $("#scanner");
+    if (!ov) { ov = document.createElement("div"); ov.id = "scanner"; ov.innerHTML = `<video playsinline muted></video><div class="frame"></div><p id="scanMsg"></p><button class="big" id="scanClose">Закрыть</button><canvas hidden></canvas>`; document.body.appendChild(ov); ov.querySelector("#scanClose").onclick = closeScanner; }
+    ov.hidden = false; const msg = $("#scanMsg"), video = ov.querySelector("video");
+    msg.textContent = "Наведите камеру на QR-метку оборудования";
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.jsQR) { msg.textContent = "Камера недоступна на этом телефоне."; return; }
+    try {
+      scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } }, audio: false });
+      video.srcObject = scanStream; await video.play();
+      const cv = ov.querySelector("canvas"), ctx = cv.getContext("2d", { willReadFrequently: true });
+      const tick = () => {
+        if (!scanStream) return;
+        if (video.readyState >= 2 && video.videoWidth) {
+          const w = 640, h = Math.round(video.videoHeight * (w / video.videoWidth)) || 480;
+          cv.width = w; cv.height = h; ctx.drawImage(video, 0, 0, w, h);
+          const res = jsQR(ctx.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: "attemptBoth" });
+          if (res && res.data) { const c = parseKt(res.data); if (c) { if (navigator.vibrate) navigator.vibrate(80); closeScanner(); return handleKt(c); } msg.textContent = "Это не метка МДСЗ-8"; }
+        }
+        scanTimer = setTimeout(tick, 180);
+      };
+      tick();
+    } catch (e) { msg.textContent = "Нет доступа к камере. Разрешите камеру для приложения в настройках телефона."; }
+  };
+  function closeScanner() { clearTimeout(scanTimer); if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; } const ov = $("#scanner"); if (ov) ov.hidden = true; }
+  function fromHash() { const c = parseKt(location.hash); if (c) { history.replaceState(null, "", location.pathname); handleKt(c); } }
+  window.addEventListener("hashchange", fromHash);
+  window.MDSZ8 = { state: () => S, A, parseKt, handleKt };
+  migrate().then(render, render).then(fromHash);
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js").then(reg => {
