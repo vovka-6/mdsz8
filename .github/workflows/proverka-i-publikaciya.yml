@@ -1,7 +1,8 @@
 # Проверка Semgrep перед публикацией приложения МДСЗ-8 на GitHub Pages.
 # Как работает: после каждой загрузки файлов в main GitHub сначала проверяет код Semgrep
 # (предложенные изменения — pull request — тоже проверяются, но не публикуются).
-#  - Нашлись опасные места (ключи, пароли, токены, eval, личная почта, картинки .jpg, файлы настроек) — публикация ОТМЕНЯЕТСЯ, на сайте остаётся прошлая версия.
+#  - Нашлись опасные места (ключи, пароли, токены, eval, личная почта, запрещённые слова, картинки .jpg, файлы настроек) — публикация ОТМЕНЯЕТСЯ, на сайте остаётся прошлая версия.
+# Запрещённые слова задаются в Settings → Secrets and variables → Actions → секрет ZAPRET_SLOVA (слова через |).
 #  - Всё чисто — сайт обновляется автоматически.
 # Общий отчёт по JavaScript (замечания, которые не останавливают публикацию) — в итогах запуска на вкладке Actions.
 # Нужна разовая настройка: Settings → Pages → Build and deployment → Source: «GitHub Actions».
@@ -33,6 +34,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Правила МДСЗ-8
+        env:
+          ZAPRET: ${{ secrets.ZAPRET_SLOVA }}   # запрещённые слова (через |) хранятся в секрете репозитория, не в этом файле
         run: |
           mkdir -p /tmp/rules
           cat > /tmp/rules/mdsz8.yml <<'EOF'
@@ -61,12 +64,14 @@ jobs:
               severity: ERROR
               message: "Личная почта в файлах сайта. Почта для отчётов задаётся только в настройках телефона."
               pattern-regex: '[A-Za-z0-9._%+-]+@(mail|bk|inbox|list|internet|yandex|ya|gmail|rambler)\.(ru|com)'
-            - id: mdsz8-company-name
-              languages: [generic]
-              severity: ERROR
-              message: "Название предприятия в файлах сайта. На открытом сайте его не указываем."
-              pattern-regex: '(?i)(ЛСР|LSR|Базовые|Гаврилов)'
           EOF
+          if [ -n "$ZAPRET" ]; then
+            printf '%s\n' "  - id: mdsz8-zapret" "    languages: [generic]" "    severity: ERROR" \
+              "    message: \"Запрещённое слово в файлах сайта (список — в секрете ZAPRET_SLOVA).\"" \
+              "    pattern-regex: '(?i)($ZAPRET)'" >> /tmp/rules/mdsz8.yml
+          else
+            echo "::warning::Секрет ZAPRET_SLOVA не задан — проверка запрещённых слов пропущена"
+          fi
 
       - name: Внутренние материалы не публикуются
         run: |
