@@ -1,7 +1,7 @@
 /* МДСЗ-8 · электронные обходы. Офлайн-PWA, данные хранятся на телефоне смены. */
 (function () {
   "use strict";
-  const D = window.D8, KEY = "mdsz8-v1", APPV = "демо 1.6.3";
+  const D = window.D8, KEY = "mdsz8-v1", APPV = "демо 1.6.4";
   const DEF = { routes: JSON.parse(JSON.stringify(D.ROUTES)), meas: JSON.parse(JSON.stringify(D.MEAS)) };
   const ADMIN_ROLE = "Администратор", ADMIN_BTN = ["settings", "map", "shift", "defects", "meas", "archive"];
   const KT = Object.fromEntries(D.KT.map(k => [k.code, k]));
@@ -463,8 +463,8 @@
     <div class="grp">Автовыход</div><div class="planrow">Выходить из учётной записи через, часов<input id="cfgSess" value="${S.cfg.sessionH || 13}" inputmode="numeric"></div>
     <button class="big go" data-a="saveSettings">Сохранить настройки</button>
     <div class="grp">Схема и карты маршрутов</div>
-    <div class="hint">Хранятся только на этом телефоне, на сайт не выкладываются. Список ниже только показывает, что загружено. Чтобы загрузить: перенесите файл «МДСЗ8_схемы.json» в память телефона (папка «Загрузки») и нажмите кнопку под списком.</div>
-    ${Object.entries(MAP_KEYS).map(([k, t]) => `<div class="planrow">${t}<b class="${MAPS[k] ? "" : "red"}">${MAPS[k] ? "✓ есть" : "— нет"}</b></div>`).join("")}
+    <div class="hint">Хранятся только на этом телефоне, на сайт не выкладываются. Нажмите на строку со ✓, чтобы посмотреть схему или карту. Чтобы загрузить: перенесите файл «МДСЗ8_схемы.json» в память телефона (папка «Загрузки») и нажмите кнопку под списком.</div>
+    ${Object.entries(MAP_KEYS).map(([k, t]) => MAPS[k] ? `<button class="planrow mview" data-a="zoom" data-v="${MAPS[k]}"><span>${t}</span><b>✓ есть · 👁 смотреть</b></button>` : `<div class="planrow">${t}<b class="red">— нет</b></div>`).join("")}
     <label class="btn center" style="font-weight:400">⬆ Загрузить файл схем (.json)<input type="file" id="mapsImport" hidden></label>
     <div class="grp">Перенос настроек на другой телефон</div>
     <div class="hint">Файл содержит персонал (ПИН — в зашифрованном виде), почту, план, нормы, схему и карты маршрутов. Обходы и дефекты не переносятся. Это внутренний файл — не выкладывайте его в интернет.</div>
@@ -502,7 +502,8 @@
   });
   A.go = (v, el) => go(v, el.dataset.i != null ? +el.dataset.i : null);
   A.closeModal = closeModal;
-  A.zoom = src => modal(`<div class="zoom"><img src="${src}"></div><button class="btn" data-a="closeModal">Закрыть</button>`);
+  A.zoom = src => modal(`<div class="zoom"><img src="${src}" data-a="zoomToggle" alt="Схема"></div><div class="hint center">Нажмите на картинку — крупнее / целиком. Двигайте пальцем.</div><button class="btn" data-a="closeModal">Закрыть</button>`);
+  A.zoomToggle = (v, el) => el.classList.toggle("big");
 
   A.pickUser = id => {
     const s = id === "admin" ? { id: "admin", fio: "Администратор", role: ADMIN_ROLE, ph: S.cfg.admin.ph } : S.cfg.staff.find(x => x.id === id); let pin = "", busy = false;
