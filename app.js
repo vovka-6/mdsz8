@@ -744,10 +744,10 @@
     h += `<div class="grp">Критические дефекты</div>` + (crit.length ? crit.map(d => `<div class="dcard c1"><b>${esc(KT[d.kt].name)}</b> — ${esc(d.desc)}<small>${d.status}</small></div>`).join("") : `<div class="note ok">Открытых критических дефектов нет</div>`);
     if (dec) return h + `<button class="big" data-a="home">На главный экран</button>`;
     h += `<div class="grp">Подтвердите перед пуском</div>` + D.PRESTART.map((t, i) => `<label class="chk"><input type="checkbox" class="pchk" data-i="${i}"> ${esc(t)}</label>`).join("");
-    if (block.length) h += `<div class="note bad"><b>Пуск запрещён:</b>${block.map(t => `<div>• ${esc(t)}</div>`).join("")}<small>Устраните и повторите проверку (откройте точку и впишите новое значение) или сообщите мастеру.</small></div>`;
+    if (block.length) h += `<div class="note bad"><b>Пуск запрещён:</b>${block.map(t => `<div>• ${esc(t)}</div>`).join("")}<small>Щель вне допуска — отрегулируйте и перезамерьте. Критический дефект — доложите мастеру смены.</small></div>`;
     else h += `<button class="big go" data-a="startOk" data-v="${rid}">✅ Пуск разрешён</button>`;
     h += `<button class="big crit" data-a="startNo" data-v="${rid}">⛔ Пуск запрещён</button>`;
-    if (block.length) h += `<button class="btn" data-a="startRecheck" data-v="${rid}">↻ Перезамерить щель после регулировки</button>`;
+    if (gaps.some(x => x.bad || (!x.g && !x.skip))) h += `<button class="btn" data-a="startRecheck" data-v="${rid}">↻ Перезамерить щель после регулировки</button>`;
     return h;
   };
   A.home = () => home();
