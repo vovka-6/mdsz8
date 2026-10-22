@@ -152,7 +152,7 @@
 
   /* Маршруты. label — значение столбца «Маршрут» в отчёте (как в Сводном журнале) */
   const ROUTES = {
-    P: { label: "П — первичный", short: "П", title: "П — перед пуском", cl: "P", list: ORDER_P, norm: 45, map: "P", meas: false },
+    P: { label: "П — первичный", short: "П", title: "П — перед пуском", cl: "P", list: ORDER_P, norm: 35, map: "P", meas: false, gap: true, prestart: true },
     PE: { label: "П — электрика", short: "П-Э", title: "П — электрика перед пуском", cl: "E", list: ORDER_P, norm: 25, map: "P", meas: false },
     C: { label: "С — сменный", short: "С", title: "С — сменный обход", cl: "C", list: ORDER_C, norm: 60, map: "C", meas: true, pult: true },
     CE: { label: "С — электрика", short: "С-Э", title: "С — электрика", cl: "E", list: ORDER_C, norm: 40, map: "C", meas: false },
@@ -192,5 +192,11 @@
   const STATUSES = ["Открыт", "В работе", "Устранён", "Перенесён в план ТО"];
   const SKIP = ["Оборудование в ремонте", "Нет безопасного доступа", "Работа под нагрузкой — доступ запрещён", "Срочное задание мастера", "Другое"];
 
-  window.D8 = { KT, ORDER_C, ORDER_P, P_PARTS, TYPES, CL, MEAS, HOT, ROUTES, ROLES, PLAN, STAFF, CATS, STATUSES, SKIP, EMAIL: "" };
+  /* Загрузочная щель дробилок — замеряет дробильщик на маршруте П перед пуском.
+     Допуски [от, до] в мм — пример; на телефоне задаются в Настройках администратора. */
+  const GAP_NAME = "Загрузочная щель";
+  const GAP = { "G8-DR-1": [100, 160], "G8-DR-2": [25, 50], "G8-DR-3": [8, 15] };
+  /* Чек-лист «Перед пуском» — подтверждает дробильщик в конце маршрута П */
+  const PRESTART = ["Люди выведены из опасных зон, у конвейеров никого нет", "Ограждения и кожухи на месте, закрыты", "Подан предупредительный звуковой сигнал", "Электрослесарь подтвердил готовность ПСУ и электрооборудования"];
+  window.D8 = { GAP_NAME, GAP, PRESTART, KT, ORDER_C, ORDER_P, P_PARTS, TYPES, CL, MEAS, HOT, ROUTES, ROLES, PLAN, STAFF, CATS, STATUSES, SKIP, EMAIL: "" };
 })();

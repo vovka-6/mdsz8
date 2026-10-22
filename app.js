@@ -1,8 +1,8 @@
 /* МДСЗ-8 · электронные обходы. Офлайн-PWA, данные хранятся на телефоне смены. */
 (function () {
   "use strict";
-  const D = window.D8, KEY = "mdsz8-v1", APPV = "демо 1.6.4";
-  const DEF = { routes: JSON.parse(JSON.stringify(D.ROUTES)), meas: JSON.parse(JSON.stringify(D.MEAS)) };
+  const D = window.D8, KEY = "mdsz8-v1", APPV = "демо 1.7";
+  const DEF = { routes: JSON.parse(JSON.stringify(D.ROUTES)), meas: JSON.parse(JSON.stringify(D.MEAS)), gap: JSON.parse(JSON.stringify(D.GAP)) };
   const ADMIN_ROLE = "Администратор", ADMIN_BTN = ["settings", "map", "shift", "defects", "meas", "archive"];
   const KT = Object.fromEntries(D.KT.map(k => [k.code, k]));
   const $ = s => document.querySelector(s);
@@ -22,7 +22,7 @@
   let S = load();
   function fresh() {
     return { cfg: { email: D.EMAIL, staff: D.STAFF.map((s, i) => ({ ...s, id: "u" + i })), plan: JSON.parse(JSON.stringify(D.PLAN)) },
-      session: null, shift: null, defects: [], cD: 0, rounds: [], meas: [], mhist: {}, archive: [] };
+      session: null, shift: null, defects: [], cD: 0, rounds: [], meas: [], mhist: {}, gaps: [], ghist: {}, starts: [], archive: [] };
   }
   function load() { try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.cfg) return s; } catch (e) { } return fresh(); }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast("Память телефона заполнена: отправьте и закройте смену"); } }
@@ -39,6 +39,8 @@
     if (!S.cfg.rolesV2) { S.cfg.staff.forEach(s => { s.admin = s.role === "Заместитель начальника ПК"; }); S.cfg.rolesV2 = true; ch = true; }
     if (!S.cfg.admin) { S.cfg.admin = { fio: "Администратор", ph: await pinHash("admin", "0000"), mustChange: true }; ch = true; }
     if (!S.cfg.norms) { S.cfg.norms = {}; S.cfg.tnorm = {}; S.cfg.sessionH = 13; ch = true; }
+    if (!S.cfg.v17) { if (S.cfg.norms.P === 45) delete S.cfg.norms.P; S.cfg.gnorm = S.cfg.gnorm || {}; S.cfg.v17 = true; ch = true; }
+    if (!S.gaps) { S.gaps = []; S.ghist = {}; S.starts = []; ch = true; }
     applyCfg();
     if (ch) save();
   }
@@ -46,6 +48,7 @@
   function applyCfg() {
     for (const k in D.ROUTES) { const d = DEF.routes[k], v = S.cfg.norms && S.cfg.norms[k]; if (d.norm != null) D.ROUTES[k].norm = v || d.norm; if (d.normPer != null) D.ROUTES[k].normPer = v || d.normPer; }
     for (const t in D.MEAS) D.MEAS[t] = DEF.meas[t].map(([pl, n]) => [pl, (S.cfg.tnorm && S.cfg.tnorm[t + "|" + pl]) || n]);
+    for (const c in D.GAP) D.GAP[c] = (S.cfg.gnorm && S.cfg.gnorm[c]) || DEF.gap[c].slice();
   }
   const isSuper = () => !!(S.session && S.session.id === "admin");
   const isResp = () => !!(me() && me().admin && !isSuper());
@@ -94,7 +97,7 @@
   const done = r => Object.values(r.pts).filter(p => p.res !== "skip").length;
 
   /* ---------- навигация ---------- */
-  let cur = { v: "login", p: null }, stack = [], ui = { tmp: {} };
+  let cur = { v: "login", p: null }, stack = [], ui = { tmp: {}, gap: {} };
   function go(v, p, replace) { closeModal(); if (!replace) stack.push(cur); cur = { v, p }; history.pushState({}, ""); render(); window.scrollTo(0, 0); }
   function back() { cur = stack.pop() || { v: S.session ? "home" : "login" }; render(); }
   window.addEventListener("popstate", () => { if ($(".modal")) { closeModal(); history.pushState({}, ""); return; } if (cur.v === "home" || cur.v === "login") return; if (cur.v === "point") A.openRound(cur.p.rid); else back(); history.pushState({}, ""); });
@@ -112,7 +115,7 @@
     if (AFTER[cur.v]) AFTER[cur.v](cur.p);
   }
   const TITLES = { home: "МДСЗ-8 · Обходы", start: "Начало обхода", round: "Обход", point: "Осмотр КТ", defect: "Замечание", crit: "⛔ КРИТ",
-    map: "Светофор МДСЗ-8", kt: "Карточка КТ", defects: "Дефекты", dedit: "Дефект", shift: "Смена: план / факт", meas: "Замеры", close: "Закрыть смену",
+    map: "Светофор МДСЗ-8", kt: "Карточка КТ", defects: "Дефекты", dedit: "Дефект", shift: "Смена: план / факт", meas: "Замеры", prestart: "Перед пуском", close: "Закрыть смену",
     send: "Отправка отчёта", archive: "Архив отчётов", settings: "Настройки", pick: "Выбор КТ", openShift: "Открыть смену" };
 
   function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(t._h); t._h = setTimeout(() => t.hidden = true, 3500); }
@@ -137,6 +140,8 @@
       (isSuper() && !emails().length ? `<div class="note bad">Не задана почта для отчётов: Настройки → «Почта для отчётов» (рабочий адрес).</div>` : "") +
       (isSuper() && !MAPS.scheme ? `<div class="note warn">Не загружены схема и карты маршрутов: Настройки → «Схема и карты маршрутов».</div>` : "") + shiftBar();
     if (ar) h += `<button class="big go" data-a="openRound" data-v="${ar.id}">▶ Продолжить: ${esc(ar.route)}<small>${done(ar) + Object.values(ar.pts).filter(p => p.res === "skip").length} из ${ar.list.length} КТ · идёт ${mins(ar.start)} мин</small></button>`;
+    const lastP = S.shift ? S.rounds.filter(r => r.end && D.ROUTES[r.rkey].prestart).pop() : null;
+    if (lastP) { const dec = (S.starts || []).filter(x => x.rid === lastP.id).pop(); h += dec ? `<button class="note ${dec.ok ? "ok" : "bad"} notebtn" data-a="openPrestart" data-v="${lastP.id}">${dec.ok ? "✅ Пуск разрешён" : "⛔ Пуск запрещён"} в ${hm(dec.ts)} — ${esc(short(dec.fio))}</button>` : `<button class="note warn notebtn" data-a="openPrestart" data-v="${lastP.id}">Маршрут П пройден — решение о пуске не принято. Открыть «Перед пуском» →</button>`; }
     const crit = S.defects.filter(d => isOpen(d) && d.cat === "Критический").length;
     if (crit) h += `<div class="note bad">⛔ Открытых критических дефектов: ${crit}</div>`;
     const L = {
@@ -251,12 +256,19 @@
           <div class="mrow"><input inputmode="decimal" id="m${i}" data-pl="${esc(pl)}" data-n="${n}" value="${v != null ? v : ""}" placeholder="°C"><span class="mst" id="ms${i}"></span></div></div>`;
       }).join("");
     }
+    if (R.gap && D.GAP[kt]) {
+      const [lo, hi] = D.GAP[kt], pg = lastGap(kt), cg = gapOf(rid, kt), v = ui.gap[kt] != null ? ui.gap[kt] : cg ? cg.v : "";
+      h += `<div class="grp">${D.GAP_NAME} — обязательно</div><div class="meas gapbox"><label>${D.GAP_NAME} дробилки, мм <small>допуск ${lo}–${hi} мм${pg ? ` · прошлая ${pg.v} мм ${dmy(pg.ts)} ${hm(pg.ts)}` : ""}</small></label>
+        <div class="mrow"><input inputmode="decimal" id="gap" data-lo="${lo}" data-hi="${hi}" value="${esc(String(v))}" placeholder="мм"><span class="mst" id="gapst"></span></div>
+        <small class="muted">Замерьте и впишите. Без этого значения точку не закрыть — его смотрят перед пуском.</small></div>`;
+    }
     if (p && p.defs && p.defs.length) h += `<div class="grp">Замечания в этой точке</div>` + p.defs.map(id => { const d = S.defects.find(x => x.id === id); return d ? `<div class="dcard c${catN(d.cat)}"><b>${esc(d.node)}</b> — ${esc(d.desc)}<small>${d.cat} · ${d.status}${d.photos.length ? " · 📷" + d.photos.length : ""}</small></div>` : ""; }).join("");
     if (p && p.res === "skip") h += `<div class="note">Пропущено: ${esc(p.reason)}</div>`;
     if (p && p.res === "ok") h += `<div class="note ok">✓ Отмечено в норме в ${hm(p.t)}</div>`;
     const qrT = (r.qr || {})[kt];
     h += qrT ? `<div class="note ok">📷 Метка отсканирована в ${hm(qrT)}</div>` : `<button class="${S.cfg.requireQR ? "big scanb" : "btn"}" data-a="scan">📷 Отсканировать метку${S.cfg.requireQR ? " (обязательно)" : ""}</button>`;
     h += `<div class="pbtns">`;
+    if (R.gap && D.GAP[kt] && (p || r.end)) h += `<button class="big go" data-a="gapSave">💾 Сохранить значение щели</button>`;
     if (!p || p.res === "skip") h += `<button class="big go" data-a="pointOk">✓ Всё в норме</button>`;
     h += `<button class="big warnb" data-a="pointDefect">✎ Есть замечание</button>`;
     if (p && p.res === "def") h += `<button class="big go" data-a="pointNext">Далее →</button>`;
@@ -264,13 +276,40 @@
     h += `<button class="btn" data-a="openRound" data-v="${rid}">☰ Список точек</button></div>`;
     return h;
   };
-  AFTER.point = () => { ui.okNoMeas = ui.okHot = false; document.querySelectorAll(".meas input").forEach(inp => { inp.addEventListener("input", () => measCheck(inp, false)); inp.addEventListener("change", () => measCheck(inp, true)); measCheck(inp, false); }); };
+  AFTER.point = () => { ui.okNoMeas = ui.okHot = ui.okGap = false; const g = $("#gap"); if (g) { g.addEventListener("input", () => gapCheck(g)); gapCheck(g); } document.querySelectorAll(".meas input:not(#gap)").forEach(inp => { inp.addEventListener("input", () => measCheck(inp, false)); inp.addEventListener("change", () => measCheck(inp, true)); measCheck(inp, false); }); };
   function checklist(cl, type) {
     if (cl === "E") return type === "CABIN" || type === "PSU" ? D.CL.E[type] : [...D.CL.E.ALL, ...(D.CL.E[type] || [])];
     if (cl === "R") return D.CL.R[type] || [...(D.CL.P[type] || []), ...(D.CL.C[type] || [])];
     return D.CL[cl][type] || D.CL.C[type] || [];
   }
   const catN = c => c === "Критический" ? 1 : c === "Значительный" ? 2 : 3;
+  /* загрузочная щель */
+  const gapOf = (rid, kt) => (S.gaps || []).filter(g => g.rid === rid && g.kt === kt).pop();
+  const lastGap = kt => { const a = (S.ghist || {})[kt]; return a && a.length ? a[a.length - 1] : null; };
+  const gapBad = g => !!g && (g.v < g.lo || g.v > g.hi);
+  function gapCheck(inp) {
+    const v = num(inp.value), lo = +inp.dataset.lo, hi = +inp.dataset.hi, st = $("#gapst"), kt = cur.p.kt;
+    ui.gap[kt] = inp.value === "" ? null : inp.value;
+    inp.classList.remove("hi"); st.textContent = "";
+    if (v == null) return;
+    if (v < lo) { inp.classList.add("hi"); st.textContent = `меньше допуска на ${Math.round((lo - v) * 10) / 10} мм`; }
+    else if (v > hi) { inp.classList.add("hi"); st.textContent = `больше допуска на ${Math.round((v - hi) * 10) / 10} мм`; }
+    else st.textContent = "в допуске";
+  }
+  function collectGap(rid, kt) {
+    const inp = $("#gap"); if (!inp) return null;
+    const v = num(inp.value); if (v == null) return null;
+    const r = S.rounds.find(x => x.id === rid), [lo, hi] = D.GAP[kt], ex = gapOf(rid, kt), now = Date.now();
+    if (ex && !r.end) { ex.v = v; ex.ts = now; ex.lo = lo; ex.hi = hi; const h = S.ghist[kt]; if (h && h.length) h[h.length - 1] = { v, ts: now }; delete ui.gap[kt]; return ex; }
+    const rec = { id: `${shiftPrefix()}-Щ${p2((S.gaps || []).length + 1)}`, ts: now, kt, v, lo, hi, fio: r.fio, rid };
+    S.gaps.push(rec); (S.ghist[kt] = S.ghist[kt] || []).push({ v, ts: now }); if (S.ghist[kt].length > 20) S.ghist[kt].shift();
+    delete ui.gap[kt]; return rec;
+  }
+  function needGap(r, kt) {
+    if (!D.ROUTES[r.rkey].gap || !D.GAP[kt] || gapOf(r.id, kt)) return false;
+    const inp = $("#gap"); if (inp && num(inp.value) != null) return false;
+    toast(`Впишите «${D.GAP_NAME}, мм» — без неё точку не закрыть`); if (inp) inp.focus(); return true;
+  }
   function lastMeas(kt, pl) { const a = S.mhist[kt + "|" + pl]; return a && a.length ? a[a.length - 1] : null; }
   const num = s => { const v = parseFloat(String(s).replace(",", ".")); return isFinite(v) ? v : null; };
   function measCheck(inp, final) {
@@ -326,10 +365,11 @@
     const od = S.defects.filter(d => d.kt === c && isOpen(d));
     if (od.some(d => d.cat === "Критический")) return "red";
     const hot = (D.MEAS[KT[c].type] || []).some(([pl, n]) => { const l = lastMeas(c, pl); return l && l.v > n; });
-    if (od.length || hot) return "yel";
+    if (od.length || hot || (D.GAP[c] && gapBad2(c))) return "yel";
     if (S.shift && S.rounds.some(r => r.pts[c] && r.pts[c].res !== "skip")) return "grn";
     return "gry";
   }
+  function gapBad2(c) { const l = lastGap(c); return !!l && (l.v < D.GAP[c][0] || l.v > D.GAP[c][1]); }
   V.map = () => {
     const cnt = { red: 0, yel: 0, grn: 0, gry: 0 }; D.KT.forEach(k => cnt[ktColor(k.code)]++);
     return `<div class="legend"><span><i class="dot red"></i>Критич. ${cnt.red}</span><span><i class="dot yel"></i>Замечания ${cnt.yel}</span><span><i class="dot grn"></i>В норме ${cnt.grn}</span><span><i class="dot gry"></i>Не осмотрено ${cnt.gry}</span></div>
@@ -344,6 +384,7 @@
     h += `<div class="grp">Осмотры в эту смену</div>` + (ins.length ? ins.map(t => `<div>${esc(t)}</div>`).join("") : `<div class="muted">нет</div>`);
     const M = D.MEAS[k.type];
     if (M) h += `<div class="grp">Последние замеры</div>` + M.map(([pl, n]) => { const a = S.mhist[c + "|" + pl] || []; return `<div>${esc(pl)}: ${a.length ? a.slice(-4).map(x => `<span class="${x.v > n ? "red" : ""}">${x.v}</span>`).join(" → ") + ` °C <small>(норма ≤ ${n})</small>` : "—"}</div>`; }).join("");
+    if (D.GAP[c]) { const a = (S.ghist || {})[c] || [], [lo, hi] = D.GAP[c]; h += `<div class="grp">${D.GAP_NAME}, мм</div><div>${a.length ? a.slice(-4).map(x => `<span class="${x.v < lo || x.v > hi ? "red" : ""}">${x.v}</span>`).join(" → ") + ` мм <small>(допуск ${lo}–${hi}, последняя ${dmy(a[a.length - 1].ts)} ${hm(a[a.length - 1].ts)})</small>` : "— ещё не замерялась"}</div>`; }
     h += `<div class="grp">Дефекты</div>` + (ds.length ? ds.map(dcard).join("") : `<div class="muted">нет</div>`);
     if (S.shift && !isView()) h += `<button class="big warnb" data-a="reportAt" data-v="${c}">⚠ Сообщить о дефекте</button>`;
     return h;
@@ -417,9 +458,11 @@
     const miss = pl.filter(([rk, rl, n]) => S.rounds.filter(r => r.end && r.rkey === rk && r.role === rl).length < n);
     const hot = S.meas.filter(m => m.v > m.n).length;
     let h = shiftBar() + `<div class="sum"><div><b>${S.rounds.filter(r => r.end).length}</b>обходов</div><div><b>${nd.length}</b>новых дефектов</div><div class="${crit ? "red" : ""}"><b>${crit}</b>КРИТ</div><div><b>${S.meas.length}</b>замеров${hot ? `, вне нормы ${hot}` : ""}</div></div>`;
+    const st = (S.starts || [])[(S.starts || []).length - 1];
+    h += st ? `<div class="note ${st.ok ? "ok" : "bad"}">${st.ok ? "✅ Пуск разрешён" : "⛔ Пуск запрещён"} в ${hm(st.ts)} — ${esc(short(st.fio))}</div>` : S.rounds.some(r => r.rkey === "P") ? `<div class="note warn">Решение о пуске после маршрута П не записано.</div>` : "";
     if (run.length) h += `<div class="note warn">Не завершены обходы: ${run.map(r => esc(r.route) + " (" + esc(short(r.fio)) + ")").join(", ")}. Они будут завершены автоматически, неосмотренные КТ — «пропуск: смена закрыта».</div>`;
     if (miss.length) h += `<div class="note warn">Не выполнен план: ${miss.map(([rk, rl, n]) => `${D.ROUTES[rk].label} (${rl}) — ${S.rounds.filter(r => r.end && r.rkey === rk && r.role === rl).length} из ${n}`).join("; ")}</div>`;
-    h += `<p>Будет сформирован файл <b>${fileName()}</b> (листы «Дефекты», «Обходы», «Замеры») и фото дефектов. Смена закроется, отчёт останется в архиве.</p>
+    h += `<p>Будет сформирован файл <b>${fileName()}</b> (листы «Дефекты», «Обходы», «Замеры», «Загрузочная щель», «Пуск») и фото дефектов. Смена закроется, отчёт останется в архиве.</p>
       <button class="big send" data-a="closeShift">Сформировать отчёт и закрыть смену</button>
       <button class="btn" data-a="go" data-v="archive">Архив отправленных отчётов</button>`;
     return h;
@@ -459,6 +502,9 @@
     ${rn.map(([k, t, v]) => `<div class="planrow">${t}<input class="rn" data-k="${k}" value="${v}" inputmode="numeric"></div>`).join("")}
     <div class="grp">Нормы температур (пирометр), °C не более</div>
     ${Object.keys(D.MEAS).map(t => D.MEAS[t].map(([pl, n]) => `<div class="planrow">${esc(D.TYPES[t][0])}: ${esc(pl)}<input class="tn" data-k="${t}|${esc(pl)}" value="${n}" inputmode="numeric"></div>`).join("")).join("")}
+    <div class="grp">${D.GAP_NAME} дробилок, допуск мм (от – до)</div>
+    ${Object.keys(D.GAP).map(c => `<div class="planrow">${esc(KT[c].name)}<span class="g2"><input class="gn" data-k="${c}" data-j="0" value="${D.GAP[c][0]}" inputmode="decimal">–<input class="gn" data-k="${c}" data-j="1" value="${D.GAP[c][1]}" inputmode="decimal"></span></div>`).join("")}
+    <div class="hint">Значения из паспорта дробилки / по распоряжению механика. Вне допуска — пуск запрещён.</div>
     <div class="grp">QR-метки</div><label class="chk"><input type="checkbox" id="cfgQR" ${S.cfg.requireQR ? "checked" : ""}> Отмечать точку обхода только после сканирования QR-метки</label>
     <div class="grp">Автовыход</div><div class="planrow">Выходить из учётной записи через, часов<input id="cfgSess" value="${S.cfg.sessionH || 13}" inputmode="numeric"></div>
     <button class="big go" data-a="saveSettings">Сохранить настройки</button>
@@ -533,7 +579,7 @@
     if (!date) return toast("Укажите дату");
     const sh = { date, no, kind };
     if (S.archive.some(a => a.file === fileName(sh))) { if (!confirm(`Отчёт ${fileName(sh)} уже был сформирован. Открыть смену с этими данными ещё раз? Новый файл заменит старый в сводном журнале.`)) return; }
-    S.shift = { ...sh, opened: Date.now(), by: me().fio, cO: 0, cT: 0, pultLog: [] }; S.rounds = []; S.meas = [];
+    S.shift = { ...sh, opened: Date.now(), by: me().fio, cO: 0, cT: 0, pultLog: [] }; S.rounds = []; S.meas = []; S.gaps = []; S.starts = [];
     save(); toast("Смена открыта"); home();
   };
 
@@ -566,8 +612,9 @@
   function activeRoundFromCur() { const id = cur.v === "round" ? cur.p : cur.p && cur.p.rid; return S.rounds.find(r => r.id === id); }
 
   function collectMeas(rid, kt) {
+    collectGap(rid, kt);
     const r = S.rounds.find(x => x.id === rid), out = [];
-    document.querySelectorAll(".meas input").forEach(inp => { const v = num(inp.value); if (v != null) out.push({ pl: inp.dataset.pl, n: +inp.dataset.n, v }); });
+    document.querySelectorAll(".meas input:not(#gap)").forEach(inp => { const v = num(inp.value); if (v != null) out.push({ pl: inp.dataset.pl, n: +inp.dataset.n, v }); });
     out.forEach(m => {
       const ex = S.meas.find(x => x.rid === rid && x.kt === kt && x.pl === m.pl);
       if (ex) { ex.v = m.v; ex.ts = Date.now(); const h = S.mhist[kt + "|" + m.pl]; if (h && h.length) h[h.length - 1] = { v: m.v, ts: ex.ts }; return; }
@@ -579,8 +626,10 @@
   const needQR = (r, kt) => { if (S.cfg.requireQR && !(r.qr || {})[kt]) { toast("Сначала отсканируйте QR-метку на оборудовании"); return true; } return false; };
   A.pointOk = () => {
     const { rid, kt } = cur.p, r = S.rounds.find(x => x.id === rid);
-    if (needQR(r, kt)) return;
-    const inputs = [...document.querySelectorAll(".meas input")];
+    if (needQR(r, kt) || needGap(r, kt)) return;
+    const gi = $("#gap"), gv = gi ? num(gi.value) : null;
+    if (gi && gv != null && (gv < +gi.dataset.lo || gv > +gi.dataset.hi) && !ui.okGap) { ui.okGap = true; return toast(`${D.GAP_NAME} вне допуска — пуск будет запрещён, пока не отрегулируют. Оформите замечание или нажмите «Всё в норме» ещё раз.`); }
+    const inputs = [...document.querySelectorAll(".meas input:not(#gap)")];
     if (inputs.some(i => num(i.value) == null) && !ui.okNoMeas) {
       ui.okNoMeas = true; return toast("Не все замеры введены. Нажмите «Всё в норме» ещё раз, чтобы продолжить без них.");
     }
@@ -597,7 +646,7 @@
     if (nx) { cur = { v: "point", p: { rid: r.id, kt: nx } }; render(); window.scrollTo(0, 0); }
     else { cur = { v: "round", p: r.id }; render(); toast("Все точки пройдены — завершите обход"); }
   }
-  A.pointNext = () => { const { rid, kt } = cur.p; nextPoint(S.rounds.find(x => x.id === rid), kt); };
+  A.pointNext = () => { const { rid, kt } = cur.p, r = S.rounds.find(x => x.id === rid); if (needGap(r, kt)) return; collectGap(rid, kt); save(); nextPoint(r, kt); };
   A.pointSkip = () => modal(`<h3>Причина пропуска</h3>${D.SKIP.map(s => `<button class="row" data-a="doSkip" data-v="${s}">${s}</button>`).join("")}<input id="skipOther" placeholder="или впишите свою причину"><button class="btn" data-a="doSkip" data-v="__other">Пропустить</button>`);
   A.doSkip = v => {
     const reason = v === "__other" || v === "Другое" ? ($("#skipOther").value.trim()) : v;
@@ -673,8 +722,59 @@
   function endRound(r) {
     r.end = Date.now(); save();
     const m = Math.round((r.end - r.start) / 60000), nd = S.defects.filter(d => d.rid === r.id).length;
+    if (D.ROUTES[r.rkey].prestart) { stack = []; cur = { v: "home" }; go("prestart", r.id); toast(`Обход завершён: ${m} мин (норматив ${r.norm}). Решение о пуске.`); return; }
     home(); toast(`Обход завершён: ${m} мин (норматив ${r.norm}), замечаний ${nd}`);
   }
+
+  /* --- перед пуском (конец маршрута П) --- */
+  function prestartState(rid) {
+    const r = S.rounds.find(x => x.id === rid);
+    const gaps = Object.keys(D.GAP).filter(c => r.list.includes(c)).map(c => { const g = gapOf(rid, c), p = r.pts[c] || {}; return { c, g, skip: p.res === "skip" ? p.reason : "", bad: gapBad(g) }; });
+    const crit = S.defects.filter(d => isOpen(d) && d.cat === "Критический");
+    const block = [];
+    crit.forEach(d => block.push(`КРИТ: ${KT[d.kt].name} — ${d.desc}`));
+    gaps.forEach(x => { if (x.bad) block.push(`${D.GAP_NAME} ${KT[x.c].name}: ${x.g.v} мм, допуск ${x.g.lo}–${x.g.hi}`); else if (!x.g && !x.skip) block.push(`${D.GAP_NAME} ${KT[x.c].name}: не замерена`); });
+    return { r, gaps, crit, block };
+  }
+  V.prestart = rid => {
+    const { r, gaps, crit, block } = prestartState(rid), dec = (S.starts || []).filter(x => x.rid === rid).pop();
+    let h = `<div class="kthead"><small>${esc(r.route)} · ${esc(short(r.fio))} · ${hm(r.start)}–${hm(r.end)}</small><h2>Перед пуском</h2></div>`;
+    if (dec) h += `<div class="note ${dec.ok ? "ok" : "bad"}"><b>${dec.ok ? "✅ Пуск разрешён" : "⛔ Пуск запрещён"}</b> в ${hm(dec.ts)} — ${esc(short(dec.fio))}${dec.reason ? `<div>Причина: ${esc(dec.reason)}</div>` : ""}</div>`;
+    h += `<div class="grp">${D.GAP_NAME} дробилок, мм</div>` + gaps.map(x => `<div class="gaprow ${x.bad ? "bad" : x.g ? "ok" : x.skip ? "" : "bad"}" data-a="openKt" data-v="${x.c}"><span>${esc(KT[x.c].name)}<small>допуск ${D.GAP[x.c][0]}–${D.GAP[x.c][1]} мм</small></span><b>${x.g ? x.g.v + " мм" : x.skip ? "пропущена" : "—"}</b><i>${x.bad ? "вне допуска" : x.g ? "✓" : x.skip ? esc(x.skip) : "не замерена"}</i></div>`).join("");
+    h += `<div class="grp">Критические дефекты</div>` + (crit.length ? crit.map(d => `<div class="dcard c1"><b>${esc(KT[d.kt].name)}</b> — ${esc(d.desc)}<small>${d.status}</small></div>`).join("") : `<div class="note ok">Открытых критических дефектов нет</div>`);
+    if (dec) return h + `<button class="big" data-a="home">На главный экран</button>`;
+    h += `<div class="grp">Подтвердите перед пуском</div>` + D.PRESTART.map((t, i) => `<label class="chk"><input type="checkbox" class="pchk" data-i="${i}"> ${esc(t)}</label>`).join("");
+    if (block.length) h += `<div class="note bad"><b>Пуск запрещён:</b>${block.map(t => `<div>• ${esc(t)}</div>`).join("")}<small>Устраните и повторите проверку (откройте точку и впишите новое значение) или сообщите мастеру.</small></div>`;
+    else h += `<button class="big go" data-a="startOk" data-v="${rid}">✅ Пуск разрешён</button>`;
+    h += `<button class="big crit" data-a="startNo" data-v="${rid}">⛔ Пуск запрещён</button>`;
+    if (block.length) h += `<button class="btn" data-a="startRecheck" data-v="${rid}">↻ Перезамерить щель после регулировки</button>`;
+    return h;
+  };
+  A.home = () => home();
+  A.openPrestart = rid => go("prestart", rid);
+  A.gapSave = () => {
+    const { rid, kt } = cur.p, r = S.rounds.find(x => x.id === rid), inp = $("#gap");
+    if (!inp || num(inp.value) == null) return toast(`Впишите «${D.GAP_NAME}, мм»`);
+    collectGap(rid, kt); save(); toast("Значение щели сохранено");
+    if (r.end) { stack = []; cur = { v: "home" }; go("prestart", rid); } else render();
+  };
+  A.startRecheck = rid => { const r = S.rounds.find(x => x.id === rid); const c = prestartState(rid).gaps.find(x => x.bad || (!x.g && !x.skip)); if (c) { stack = []; cur = { v: "home" }; go("point", { rid, kt: c.c }); } else render(); };
+  A.startOk = rid => {
+    const st = prestartState(rid); if (st.block.length) return render();
+    if ([...document.querySelectorAll(".pchk")].some(i => !i.checked)) return toast("Отметьте все пункты проверки перед пуском");
+    S.starts.push({ rid, ts: Date.now(), ok: true, fio: me().fio, role: me().role, reason: "", gaps: st.gaps.map(x => `${KT[x.c].name}: ${x.g ? x.g.v + " мм" : "пропущена"}`).join("; ") });
+    save(); render(); toast("Пуск разрешён — записано в отчёт смены");
+  };
+  A.startNo = rid => {
+    const st = prestartState(rid);
+    modal(`<h3>⛔ Пуск запрещён</h3><p>Причина (сообщите мастеру смены):</p><textarea id="noWhy" rows="3">${esc(st.block.join("; "))}</textarea><button class="big crit" data-a="startNoSave" data-v="${rid}">Записать запрет</button><button class="btn" data-a="closeModal">Отмена</button>`);
+  };
+  A.startNoSave = rid => {
+    const why = $("#noWhy").value.trim(); if (!why) return toast("Впишите причину");
+    const st = prestartState(rid);
+    S.starts.push({ rid, ts: Date.now(), ok: false, fio: me().fio, role: me().role, reason: why, gaps: st.gaps.map(x => `${KT[x.c].name}: ${x.g ? x.g.v + " мм" : "—"}`).join("; ") });
+    save(); closeModal(); render(); toast("Запрет пуска записан");
+  };
 
   A.openKt = c => go("kt", c);
   A.openDef = id => go("dedit", id);
@@ -721,6 +821,10 @@
       .concat(S.rounds.map(r => { const sk = Object.values(r.pts).filter(p => p.res === "skip").length; return [r.id, DT(shMs, "d"), sh.no, sh.kind, r.route, r.fio, r.role, DT(r.start, "dt"), DT(r.end, "dt"), Math.round((r.end - r.start) / 60000), r.norm, r.list.length, r.list.length - sk, sk, r.pult]; }));
     const ZAM = [["ID замера", "Дата и время", "Код КТ", "Оборудование", "Место замера", "t, °C", "Норма, °C", "Вне нормы", "ФИО"]]
       .concat(S.meas.map(m => [m.id, DT(m.ts, "dt"), m.kt, KT[m.kt].name, m.pl, m.v, m.n, m.v > m.n ? "Да" : "Нет", m.fio]));
+    const GAPS = [["ID замера", "Дата и время", "ID обхода", "Код КТ", "Дробилка", "Загрузочная щель, мм", "Допуск от, мм", "Допуск до, мм", "В допуске", "ФИО"]]
+      .concat((S.gaps || []).map(g => [g.id, DT(g.ts, "dt"), g.rid, g.kt, KT[g.kt].name, g.v, g.lo, g.hi, gapBad(g) ? "Нет" : "Да", g.fio]));
+    const PUSK = [["Дата и время", "ID обхода", "Решение", "Причина запрета", "Загрузочная щель", "ФИО", "Роль"]]
+      .concat((S.starts || []).map(x => [DT(x.ts, "dt"), x.rid, x.ok ? "Пуск разрешён" : "Пуск запрещён", x.reason, x.gaps, x.fio, x.role]));
     const PTS = [["ID обхода", "Маршрут", "ФИО", "№", "Код КТ", "Оборудование", "Время", "Результат", "Причина пропуска", "ID дефектов", "Метка QR"]];
     S.rounds.forEach(r => r.list.forEach((c, i) => { const p = r.pts[c] || {}; PTS.push([r.id, r.route, r.fio, i + 1, c, KT[c].name, DT(p.t, "dt"), p.res === "ok" ? "Норма" : p.res === "def" ? "Замечание" : "Пропуск", p.reason || "", (p.defs || []).join("; "), (r.qr || {})[c] ? "Да" : "Нет"]); }));
     const sheets = [
@@ -728,6 +832,8 @@
       { name: "Обходы", cols: [22, 12, 7, 15, 16, 20, 16, 16, 16, 8, 10, 9, 9, 10, 20], rows: OBH },
       { name: "Замеры", cols: [22, 16, 11, 30, 26, 8, 9, 9, 20], rows: ZAM },
       { name: "Точки обхода", cols: [22, 16, 20, 5, 11, 30, 16, 11, 26, 24, 10], rows: PTS },
+      { name: "Загрузочная щель", cols: [22, 16, 22, 11, 30, 12, 10, 10, 10, 20], rows: GAPS },
+      { name: "Пуск", cols: [16, 22, 16, 40, 60, 20, 18], rows: PUSK },
     ];
     const nd = S.defects.filter(d => d.date >= sh.opened), crit = nd.filter(d => d.cat === "Критический").length;
     const openAll = S.defects.filter(isOpen), openCrit = openAll.filter(d => d.cat === "Критический").length;
@@ -739,11 +845,12 @@
       `  всего обходов: ${S.rounds.length}, пропущено КТ: ${S.rounds.reduce((s, r) => s + Object.values(r.pts).filter(p => p.res === "skip").length, 0)}`, ``,
       `Новых дефектов: ${nd.length}, из них критических: ${crit}`, `Открытых дефектов всего: ${openAll.length} (критических: ${openCrit})`,
       `Замеров: ${S.meas.length}, вне нормы: ${S.meas.filter(m => m.v > m.n).length}`,
+      ...((S.starts || []).length ? [``, `Перед пуском:`, ...S.starts.map(x => `  ${hm(x.ts)} ${x.ok ? "ПУСК РАЗРЕШЁН" : "ПУСК ЗАПРЕЩЁН: " + x.reason} — ${short(x.fio)}`), `  ${D.GAP_NAME}: ${S.starts[S.starts.length - 1].gaps}`] : (S.gaps || []).length ? [``, `${D.GAP_NAME}: ${S.gaps.map(g => `${KT[g.kt].name} ${g.v} мм`).join("; ")}`] : []),
       ...(nd.length ? [``, `Новые дефекты:`, ...nd.slice(0, 15).map(d => `  • ${KT[d.kt].name}: ${d.desc} — ${d.cat}, ${d.status}`)] : []),
       ``, `Вложения: ${fileName(sh)}${photos.length ? ` + фото ${photos.length} шт.` : ""}`, `Сохраните вложения в папку «МДСЗ-8 Отчёты» и обновите Сводный журнал.`].join("\r\n");
     S.archive.push({ file: fileName(sh), subject, body, sheets, photos, created: now, sent: null, by: u.fio });
     if (S.archive.length > 40) S.archive.shift();
-    S.shift = null; S.rounds = []; S.meas = [];
+    S.shift = null; S.rounds = []; S.meas = []; S.gaps = []; S.starts = [];
     save(); stack = []; cur = { v: "home" }; go("send", S.archive.length - 1);
   };
   function dl(blob, name) { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000); }
@@ -815,6 +922,9 @@
     document.querySelectorAll(".pn").forEach(i => { const v = parseInt(i.value, 10); if (v >= 0) S.cfg.plan[i.dataset.k][+i.dataset.j][2] = v; });
     document.querySelectorAll(".rn").forEach(i => { const v = parseInt(i.value, 10); if (v > 0) S.cfg.norms[i.dataset.k] = v; });
     document.querySelectorAll(".tn").forEach(i => { const v = parseFloat(i.value.replace(",", ".")); if (v > 0) S.cfg.tnorm[i.dataset.k] = v; });
+    const gn = {}; document.querySelectorAll(".gn").forEach(i => { const v = parseFloat(i.value.replace(",", ".")); (gn[i.dataset.k] = gn[i.dataset.k] || [])[+i.dataset.j] = v; });
+    for (const c in gn) { const [lo, hi] = gn[c]; if (!(lo > 0 && hi > lo)) return toast(`Проверьте допуск щели: ${KT[c].name}`); }
+    S.cfg.gnorm = gn;
     S.cfg.requireQR = $("#cfgQR").checked;
     const h = parseInt($("#cfgSess").value, 10); if (h >= 1 && h <= 24) S.cfg.sessionH = h;
     applyCfg(); save(); toast("Настройки сохранены"); back();

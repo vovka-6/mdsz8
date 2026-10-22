@@ -1,7 +1,7 @@
 /* Офлайн-режим: все файлы приложения хранятся на телефоне.
    После любого изменения файлов на GitHub увеличьте VERSION —
    телефоны скачают обновление при следующем выходе в интернет. */
-const VERSION = "mdsz8-v11";
+const VERSION = "mdsz8-v12";
 const FILES = [
   "./", "./index.html", "./app.js", "./data.js", "./xlsx-lite.js", "./jsQR.js", "./manifest.webmanifest",
   "./icon-192.png", "./icon-512.png", "./icon-maskable-512.png", "./apple-touch-icon.png",
