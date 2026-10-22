@@ -1,7 +1,7 @@
 /* МДСЗ-8 · электронные обходы. Офлайн-PWA, данные хранятся на телефоне смены. */
 (function () {
   "use strict";
-  const D = window.D8, KEY = "mdsz8-v1", APPV = "демо 1.6.2";
+  const D = window.D8, KEY = "mdsz8-v1", APPV = "демо 1.6.3";
   const DEF = { routes: JSON.parse(JSON.stringify(D.ROUTES)), meas: JSON.parse(JSON.stringify(D.MEAS)) };
   const ADMIN_ROLE = "Администратор", ADMIN_BTN = ["settings", "map", "shift", "defects", "meas", "archive"];
   const KT = Object.fromEntries(D.KT.map(k => [k.code, k]));
@@ -463,8 +463,8 @@
     <div class="grp">Автовыход</div><div class="planrow">Выходить из учётной записи через, часов<input id="cfgSess" value="${S.cfg.sessionH || 13}" inputmode="numeric"></div>
     <button class="big go" data-a="saveSettings">Сохранить настройки</button>
     <div class="grp">Схема и карты маршрутов</div>
-    <div class="hint">Хранятся только на этом телефоне, на сайт не выкладываются. Сначала перенесите файл «МДСЗ8_схемы.json» в память телефона (папка «Загрузки»), затем нажмите кнопку ниже и выберите его в «Загрузки» или «Файлы».</div>
-    ${Object.entries(MAP_KEYS).map(([k, t]) => `<label class="chk">${MAPS[k] ? "✓" : "—"} ${t}<input type="file" class="mapIn" data-k="${k}" accept="image/*" hidden></label>`).join("")}
+    <div class="hint">Хранятся только на этом телефоне, на сайт не выкладываются. Список ниже только показывает, что загружено. Чтобы загрузить: перенесите файл «МДСЗ8_схемы.json» в память телефона (папка «Загрузки») и нажмите кнопку под списком.</div>
+    ${Object.entries(MAP_KEYS).map(([k, t]) => `<div class="planrow">${t}<b class="${MAPS[k] ? "" : "red"}">${MAPS[k] ? "✓ есть" : "— нет"}</b></div>`).join("")}
     <label class="btn center" style="font-weight:400">⬆ Загрузить файл схем (.json)<input type="file" id="mapsImport" hidden></label>
     <div class="grp">Перенос настроек на другой телефон</div>
     <div class="hint">Файл содержит персонал (ПИН — в зашифрованном виде), почту, план, нормы, схему и карты маршрутов. Обходы и дефекты не переносятся. Это внутренний файл — не выкладывайте его в интернет.</div>
@@ -476,10 +476,6 @@
     <p class="muted">Версия ${APPV}. Если ПИН администратора забыт, восстановить его нельзя — только сбросить данные сайта в Chrome (сотрёт всё). Храните файл настроек.</p>`;
   };
   AFTER.settings = () => {
-    document.querySelectorAll(".mapIn").forEach(inp => inp.addEventListener("change", async e => {
-      const file = e.target.files[0]; if (!file) return;
-      try { await IDB.put("map:" + inp.dataset.k, await shrinkTo(file, 2400)); await loadMaps(); toast("Картинка сохранена на телефоне"); render(); } catch (er) { toast("Не удалось сохранить картинку"); }
-    }));
     const mi = $("#mapsImport");
     if (mi) mi.addEventListener("change", async e => {
       const file = e.target.files[0]; if (!file) return;
