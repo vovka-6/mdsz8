@@ -1,0 +1,115 @@
+# Проверка Semgrep перед публикацией приложения МДСЗ-8 на GitHub Pages.
+# Как работает: после каждой загрузки файлов в main GitHub сначала проверяет код Semgrep
+# (предложенные изменения — pull request — тоже проверяются, но не публикуются).
+#  - Нашлись опасные места (ключи, пароли, токены, eval, личная почта, картинки .jpg, файлы настроек) — публикация ОТМЕНЯЕТСЯ, на сайте остаётся прошлая версия.
+#  - Всё чисто — сайт обновляется автоматически.
+# Общий отчёт по JavaScript (замечания, которые не останавливают публикацию) — в итогах запуска на вкладке Actions.
+# Нужна разовая настройка: Settings → Pages → Build and deployment → Source: «GitHub Actions».
+
+name: Проверка Semgrep и публикация
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: Проверка кода (Semgrep)
+    runs-on: ubuntu-latest
+    container: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Правила МДСЗ-8
+        run: |
+          mkdir -p /tmp/rules
+          cat > /tmp/rules/mdsz8.yml <<'EOF'
+          rules:
+            - id: mdsz8-eval
+              languages: [javascript]
+              severity: ERROR
+              message: "eval / new Function выполняют строку как код — так можно запустить чужой код. Уберите."
+              pattern-either:
+                - pattern: eval(...)
+                - pattern: new Function(...)
+            - id: mdsz8-document-write
+              languages: [javascript]
+              severity: ERROR
+              message: "document.write небезопасен и ломает офлайн-режим. Используйте обычную отрисовку экрана."
+              pattern: document.write(...)
+            - id: mdsz8-timer-string
+              languages: [javascript]
+              severity: ERROR
+              message: "Таймер со строкой вместо функции — это тот же eval."
+              pattern-either:
+                - pattern: setTimeout("...", ...)
+                - pattern: setInterval("...", ...)
+            - id: mdsz8-personal-email
+              languages: [generic]
+              severity: ERROR
+              message: "Личная почта в файлах сайта. Почта для отчётов задаётся только в настройках телефона."
+              pattern-regex: '[A-Za-z0-9._%+-]+@(mail|bk|inbox|list|internet|yandex|ya|gmail|rambler)\.(ru|com)'
+            - id: mdsz8-company-name
+              languages: [generic]
+              severity: ERROR
+              message: "Название предприятия в файлах сайта. На открытом сайте его не указываем."
+              pattern-regex: '(?i)(ЛСР|LSR|Базовые|Гаврилов)'
+          EOF
+
+      - name: Внутренние материалы не публикуются
+        run: |
+          found=$(find . -path ./.git -prune -o -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*настройки*.json' -o -iname '*схемы*.json' \) -print)
+          if [ -n "$found" ]; then
+            echo "::error::На сайт не выкладываются схемы, фото и файлы настроек: $found"
+            exit 1
+          fi
+
+      - name: Блокирующая проверка — секреты и правила МДСЗ-8
+        run: >
+          semgrep scan
+          --config p/secrets
+          --config /tmp/rules/mdsz8.yml
+          --exclude jsQR.js
+          --exclude .github
+          --metrics=off
+          --error
+
+      - name: Отчёт по JavaScript (не останавливает публикацию)
+        if: always()
+        run: |
+          semgrep scan --config p/javascript --exclude jsQR.js --metrics=off > report.txt 2>&1 || true
+          {
+            echo "## Отчёт Semgrep по JavaScript (для сведения)"
+            echo '```'
+            tail -n 200 report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Публикация на GitHub Pages
+    needs: semgrep
+    if: github.event_name != 'pull_request'   # предложенные изменения только проверяются, публикуется лишь main
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4
